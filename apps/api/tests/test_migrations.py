@@ -10,22 +10,59 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 
+from app.db.migrations import validated_test_database_url
+from app.db.alembic_config import configparser_safe_url
+
+
+def test_migration_fixture_rejects_non_test_database_before_alembic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = False
+
+    def should_not_run(*_args: object, **_kwargs: object) -> None:
+        nonlocal called
+        called = True
+
+    monkeypatch.setenv(
+        "TEST_DATABASE_URL",
+        "postgresql+psycopg://postgres:postgres@localhost:5432/admission_coach",
+    )
+    monkeypatch.setattr(command, "upgrade", should_not_run)
+
+    dependency = migrated_database_url.__wrapped__(monkeypatch)
+    with pytest.raises(pytest.fail.Exception, match="admission_coach_test"):
+        next(dependency)
+
+    assert called is False
+
 
 @pytest.fixture
-def migrated_database_url() -> Iterator[str]:
+def migrated_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     """Apply the Alembic head revision to the dedicated integration database."""
     database_url = os.environ.get("TEST_DATABASE_URL")
     if not database_url:
         pytest.fail("TEST_DATABASE_URL must point to the dedicated migration test database")
+    try:
+        database_url = validated_test_database_url(database_url)
+    except ValueError as error:
+        pytest.fail(str(error))
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+    monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
 
     project_root = Path(__file__).resolve().parents[1]
     config = Config(str(project_root / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", database_url)
+    config.set_main_option("sqlalchemy.url", configparser_safe_url(database_url))
     command.upgrade(config, "head")
     try:
         yield database_url
     finally:
         command.downgrade(config, "base")
+        get_settings.cache_clear()
 
 
 @pytest.fixture

@@ -19,9 +19,13 @@ def get_session_factory() -> sessionmaker[Session]:
 
 
 def get_db() -> Iterator[Session]:
-    """Yield one transaction-scoped SQLAlchemy session per request."""
+    """Yield a request-scoped session, committing on success and rolling back on error."""
     session = get_session_factory()()
     try:
         yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
     finally:
         session.close()
