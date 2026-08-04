@@ -1,0 +1,7 @@
+allowBuilds:
+  sharp: set this to true or false
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver
+minimumReleaseAgeExclude:
+  - '@testing-library/user-event@14.6.3'
