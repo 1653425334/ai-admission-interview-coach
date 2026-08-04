@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from uuid import uuid4
 
 from fastapi import FastAPI, Request
@@ -81,6 +80,7 @@ def install_exception_handlers(app: FastAPI) -> None:
             status_code=exc.status_code,
             code="HTTP_ERROR",
             message="The requested operation could not be completed.",
+            headers={"WWW-Authenticate": "Bearer"} if exc.status_code == 401 else None,
         )
 
     @app.exception_handler(Exception)

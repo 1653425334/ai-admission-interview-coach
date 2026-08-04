@@ -11,6 +11,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, get_settings
+from app.core.errors import ApiError
 from app.core.security import AuthPrincipal, get_current_principal
 from app.main import create_app
 
@@ -31,7 +32,7 @@ def settings() -> Settings:
         database_url="postgresql://unused",
         supabase_url="https://project.supabase.co",
         supabase_service_role_key="unused",
-        web_origin="http://localhost:3000",
+        web_origin="https://web.example",
     )
 
 
@@ -47,7 +48,7 @@ def client(settings: Settings, jwks: dict[str, object], monkeypatch: pytest.Monk
     from app.core import security
 
     monkeypatch.setattr(security, "get_jwks", lambda _: jwks)
-    app = create_app()
+    app = create_app(settings)
     app.dependency_overrides[get_settings] = lambda: settings
 
     @app.get("/api/v1/test-auth")
@@ -80,6 +81,32 @@ def auth_headers(token: str) -> dict[str, str]:
 
 def test_production_app_does_not_expose_test_auth_route() -> None:
     assert TestClient(create_app()).get("/api/v1/test-auth").status_code == 404
+
+
+def test_app_factory_uses_validated_settings_for_cors() -> None:
+    client = TestClient(create_app())
+    allowed = client.options(
+        "/api/v1/health",
+        headers={"Origin": "https://web.example", "Access-Control-Request-Method": "GET"},
+    )
+    denied = client.options(
+        "/api/v1/health",
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
+    )
+
+    assert allowed.headers["access-control-allow-origin"] == "https://web.example"
+    assert "access-control-allow-origin" not in denied.headers
+
+
+def test_app_factory_does_not_mask_settings_failures(monkeypatch: pytest.MonkeyPatch) -> None:
+    import app.main as main_module
+
+    def missing_settings() -> Settings:
+        raise RuntimeError("configuration missing")
+
+    monkeypatch.setattr(main_module, "get_settings", missing_settings)
+    with pytest.raises(RuntimeError, match="configuration missing"):
+        main_module.create_app()
 
 
 def test_missing_bearer_token_is_401(client: TestClient) -> None:
@@ -156,17 +183,17 @@ def test_cors_allows_only_configured_web_origin(client: TestClient) -> None:
     allowed = client.options(
         "/api/v1/health",
         headers={
-            "Origin": "http://localhost:3000",
+            "Origin": "https://web.example",
             "Access-Control-Request-Method": "GET",
             "Access-Control-Request-Headers": "authorization, content-type, idempotency-key, x-request-id",
         },
     )
     denied = client.options(
         "/api/v1/health",
-        headers={"Origin": "https://untrusted.example", "Access-Control-Request-Method": "GET"},
+        headers={"Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET"},
     )
 
-    assert allowed.headers["access-control-allow-origin"] == "http://localhost:3000"
+    assert allowed.headers["access-control-allow-origin"] == "https://web.example"
     assert set(allowed.headers["access-control-allow-headers"].lower().split(", ")) >= {
         "authorization",
         "content-type",
@@ -174,3 +201,58 @@ def test_cors_allows_only_configured_web_origin(client: TestClient) -> None:
         "x-request-id",
     }
     assert "access-control-allow-origin" not in denied.headers
+
+
+class _JwksResponse:
+    def __init__(self, document: object) -> None:
+        self.document = document
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> object:
+        if isinstance(self.document, Exception):
+            raise self.document
+        return self.document
+
+
+def test_jwks_network_and_json_failures_are_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import security
+
+    security.get_jwks.cache_clear()
+
+    def network_failure(url: str, *, timeout: float) -> _JwksResponse:
+        raise security.httpx.ConnectError("provider host unavailable")
+
+    monkeypatch.setattr(security.httpx, "get", network_failure)
+    with pytest.raises(ApiError) as network_error:
+        security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json")
+    assert network_error.value.status_code == 503
+    assert network_error.value.code == "AUTH_UNAVAILABLE"
+    assert "host unavailable" not in network_error.value.message
+
+    security.get_jwks.cache_clear()
+    monkeypatch.setattr(security.httpx, "get", lambda url, *, timeout: _JwksResponse(ValueError("bad json")))
+    with pytest.raises(ApiError) as json_error:
+        security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json")
+    assert json_error.value.status_code == 503
+    assert json_error.value.code == "AUTH_UNAVAILABLE"
+
+
+def test_jwks_response_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import security
+
+    calls = 0
+    document: dict[str, object] = {"keys": []}
+    security.get_jwks.cache_clear()
+
+    def fetch(url: str, *, timeout: float) -> _JwksResponse:
+        nonlocal calls
+        calls += 1
+        return _JwksResponse(document)
+
+    monkeypatch.setattr(security.httpx, "get", fetch)
+
+    assert security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json") == document
+    assert security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json") == document
+    assert calls == 1

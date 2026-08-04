@@ -4,25 +4,18 @@ from uuid import UUID, uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import ValidationError
-
 from app.api.routes.health import router as health_router
 from app.core.config import Settings, get_settings
 from app.core.errors import install_exception_handlers
 
 
-def _cors_origin(settings: Settings | None) -> str:
-    """Use the validated setting when supplied, with its documented default in tests."""
-    if settings is not None:
-        return settings.web_origin
-    return str(Settings.model_fields["web_origin"].default)
-
-
 def create_app(settings: Settings | None = None) -> FastAPI:
+    """Create an application using a complete, validated server configuration."""
+    settings = settings if settings is not None else get_settings()
     app = FastAPI(title="AI Admission Interview Coach API")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=[_cors_origin(settings)],
+        allow_origins=[settings.web_origin],
         allow_credentials=True,
         allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
@@ -45,10 +38,4 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     return app
 
 
-try:
-    # The production ASGI application uses validated settings.  Keeping the
-    # factory usable without server-only settings lets health/unit-test apps be
-    # constructed independently of database credentials.
-    app = create_app(get_settings())
-except ValidationError:
-    app = create_app()
+app = create_app()
