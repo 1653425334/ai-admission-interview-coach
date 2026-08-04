@@ -7,6 +7,9 @@ out/
 .venv/
 __pycache__/
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
 .env*
 !.env.example
 
