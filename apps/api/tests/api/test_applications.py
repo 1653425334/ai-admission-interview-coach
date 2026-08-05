@@ -24,11 +24,10 @@ from app.main import create_app
 
 
 @pytest.fixture
-def integration_engine(monkeypatch: pytest.MonkeyPatch) -> Iterator[Engine]:
-    env_file = Path(__file__).resolve().parents[4] / ".env"
-    database_url = validated_test_database_url(
-        env_file.read_text(encoding="utf-8").split("TEST_DATABASE_URL=", 1)[1].splitlines()[0]
-    )
+def integration_engine(
+    monkeypatch: pytest.MonkeyPatch, locked_test_database_url: str
+) -> Iterator[Engine]:
+    database_url = locked_test_database_url
     monkeypatch.setenv("DATABASE_URL", database_url)
     get_settings.cache_clear()
     config = Config(str(Path(__file__).resolve().parents[2] / "alembic.ini"))

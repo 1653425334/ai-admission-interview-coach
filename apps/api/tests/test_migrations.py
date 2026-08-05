@@ -30,19 +30,17 @@ def test_migration_fixture_rejects_non_test_database_before_alembic(
     )
     monkeypatch.setattr(command, "upgrade", should_not_run)
 
-    dependency = migrated_database_url.__wrapped__(monkeypatch)
+    dependency = _migrated_database_url(monkeypatch, os.environ["TEST_DATABASE_URL"])
     with pytest.raises(pytest.fail.Exception, match="admission_coach_test"):
         next(dependency)
 
     assert called is False
 
 
-@pytest.fixture
-def migrated_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+def _migrated_database_url(
+    monkeypatch: pytest.MonkeyPatch, database_url: str
+) -> Iterator[str]:
     """Apply the Alembic head revision to the dedicated integration database."""
-    database_url = os.environ.get("TEST_DATABASE_URL")
-    if not database_url:
-        pytest.fail("TEST_DATABASE_URL must point to the dedicated migration test database")
     try:
         database_url = validated_test_database_url(database_url)
     except ValueError as error:
@@ -64,6 +62,13 @@ def migrated_database_url(monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
     finally:
         command.downgrade(config, "base")
         get_settings.cache_clear()
+
+
+@pytest.fixture
+def migrated_database_url(
+    monkeypatch: pytest.MonkeyPatch, locked_test_database_url: str
+) -> Iterator[str]:
+    yield from _migrated_database_url(monkeypatch, locked_test_database_url)
 
 
 @pytest.fixture
