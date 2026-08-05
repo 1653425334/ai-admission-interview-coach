@@ -92,10 +92,11 @@ def create_document(
         sha256=validated_pdf.sha256,
         parse_status="UPLOADED",
     )
-    db.add(document)
     try:
-        db.commit()
+        db.add(document)
+        db.flush()
         db.refresh(document)
+        db.commit()
     except IntegrityError as error:
         db.rollback()
         _best_effort_delete(storage, storage_key, request_id)
@@ -135,7 +136,7 @@ def delete_owned_document(
 
     try:
         storage.delete(document.storage_key)
-    except ApiError:
+    except Exception:
         raise ApiError(
             503,
             "STORAGE_DELETE_FAILED",

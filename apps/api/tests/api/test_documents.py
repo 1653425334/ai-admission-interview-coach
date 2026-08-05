@@ -30,7 +30,7 @@ class FakeStorage:
         self.put_calls: list[tuple[str, bytes, str]] = []
         self.delete_calls: list[str] = []
         self.put_error: ApiError | None = None
-        self.delete_error: ApiError | None = None
+        self.delete_error: Exception | None = None
 
     def put(self, key: str, content: bytes, content_type: str) -> None:
         self.put_calls.append((key, content, content_type))
@@ -322,6 +322,59 @@ def test_database_failure_cleans_uploaded_object(
     assert _document_count(integration_engine) == 0
 
 
+@pytest.mark.parametrize("failing_operation", ["flush", "refresh"])
+def test_precommit_database_failure_rolls_back_and_cleans_storage(
+    failing_operation: str,
+    client_for_user: Callable[[str], TestClient],
+    integration_engine: Engine,
+    text_pdf_bytes: bytes,
+    fake_storage: FakeStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = client_for_user("a")
+    application_id = _create_application(client)
+
+    def fail(self: Session, *args: object, **kwargs: object) -> None:
+        raise OperationalError(failing_operation, {}, Exception("database down"))
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Session, failing_operation, fail)
+        response = _upload(client, application_id, text_pdf_bytes)
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "DOCUMENT_SAVE_FAILED"
+    assert fake_storage.delete_calls == [fake_storage.put_calls[0][0]]
+    assert fake_storage.objects == {}
+    assert _document_count(integration_engine) == 0
+
+
+def test_successful_commit_is_not_followed_by_document_refresh(
+    client_for_user: Callable[[str], TestClient],
+    text_pdf_bytes: bytes,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = client_for_user("a")
+    application_id = _create_application(client)
+    original_commit = Session.commit
+    original_refresh = Session.refresh
+    commit_completed = False
+
+    def tracked_commit(self: Session) -> None:
+        nonlocal commit_completed
+        original_commit(self)
+        commit_completed = True
+
+    def guarded_refresh(self: Session, instance: object, *args: object, **kwargs: object) -> None:
+        if commit_completed and isinstance(instance, Document):
+            raise AssertionError("Document refresh occurred after commit")
+        original_refresh(self, instance, *args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Session, "commit", tracked_commit)
+        patcher.setattr(Session, "refresh", guarded_refresh)
+        response = _upload(client, application_id, text_pdf_bytes)
+    assert response.status_code == 201
+
+
 def test_non_duplicate_integrity_failure_is_not_reported_as_duplicate(
     client_for_user: Callable[[str], TestClient],
     text_pdf_bytes: bytes,
@@ -379,6 +432,50 @@ def test_delete_storage_failure_preserves_database_row(
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "STORAGE_DELETE_FAILED"
     assert _document_count(integration_engine) == 1
+
+
+def test_non_api_storage_delete_failure_is_mapped_and_preserves_row(
+    client_for_user: Callable[[str], TestClient],
+    integration_engine: Engine,
+    text_pdf_bytes: bytes,
+    fake_storage: FakeStorage,
+) -> None:
+    client = client_for_user("a")
+    uploaded = _upload(client, _create_application(client), text_pdf_bytes).json()
+    fake_storage.delete_error = RuntimeError("provider response must stay private")
+    response = client.delete(f"/api/v1/documents/{uploaded['id']}")
+    assert response.status_code == 503
+    assert response.json()["error"]["code"] == "STORAGE_DELETE_FAILED"
+    assert "provider response" not in response.text
+    assert _document_count(integration_engine) == 1
+
+
+def test_delete_commit_failure_preserves_row_and_retry_converges(
+    client_for_user: Callable[[str], TestClient],
+    integration_engine: Engine,
+    text_pdf_bytes: bytes,
+    fake_storage: FakeStorage,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = client_for_user("a")
+    uploaded = _upload(client, _create_application(client), text_pdf_bytes).json()
+    storage_key = fake_storage.put_calls[0][0]
+
+    def fail_commit(self: Session) -> None:
+        raise OperationalError("delete", {}, Exception("database down"))
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Session, "commit", fail_commit)
+        first = client.delete(f"/api/v1/documents/{uploaded['id']}")
+    assert first.status_code == 500
+    assert first.json()["error"]["code"] == "DOCUMENT_DELETE_FAILED"
+    assert storage_key not in fake_storage.objects
+    assert _document_count(integration_engine) == 1
+
+    second = client.delete(f"/api/v1/documents/{uploaded['id']}")
+    assert second.status_code == 204
+    assert fake_storage.delete_calls == [storage_key, storage_key]
+    assert _document_count(integration_engine) == 0
 
 
 def test_missing_document_is_not_found_without_storage_call(
