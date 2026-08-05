@@ -1,7 +1,12 @@
-export default function Home() {
-  return (
-    <main className="flex flex-1 items-center justify-center">
-      <h1>AI Admission Interview Coach</h1>
-    </main>
-  );
+import { redirect } from "next/navigation";
+
+import { createServerSupabaseClient } from "@/lib/supabase/server";
+
+export default async function Home() {
+  const supabase = await createServerSupabaseClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  redirect(user ? "/applications" : "/sign-in");
 }
