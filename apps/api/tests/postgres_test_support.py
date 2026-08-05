@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
+from pydantic import ValidationError
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Connection, Engine
 
+from app.core.config import ENV_FILE
 from app.db.migrations import validated_test_database_url
 
 
@@ -15,11 +17,22 @@ from app.db.migrations import validated_test_database_url
 ADMISSION_COACH_TEST_SCHEMA_LOCK_KEY = 5_698_346_596_182_293_115
 
 
+class TestDatabaseSettings(BaseSettings):
+    """Test-only settings that use the same repository-root env file as the API."""
+
+    test_database_url: str
+
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+
+
 def get_test_database_url() -> str:
     """Read and validate the dedicated database used by integration tests."""
-    database_url = os.environ.get("TEST_DATABASE_URL")
-    if not database_url:
-        raise ValueError("TEST_DATABASE_URL must point to the dedicated migration test database")
+    try:
+        database_url = TestDatabaseSettings().test_database_url
+    except ValidationError as error:
+        raise ValueError(
+            "TEST_DATABASE_URL must point to the dedicated migration test database"
+        ) from error
     return validated_test_database_url(database_url)
 
 
