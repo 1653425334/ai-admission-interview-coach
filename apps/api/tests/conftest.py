@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
+from tests.pdf_factory import build_pdf
 from tests.postgres_test_support import acquire_test_schema_lock, get_test_database_url
 
 
@@ -24,3 +26,17 @@ def locked_test_database_url():
         yield database_url
     finally:
         lock.release()
+
+
+@pytest.fixture
+def text_pdf_bytes() -> bytes:
+    """Provide a deterministic one-page PDF with extractable text."""
+    return build_pdf()
+
+
+@pytest.fixture
+def text_pdf_path(tmp_path: Path, text_pdf_bytes: bytes) -> Path:
+    """Provide the shared valid upload fixture required by document API tests."""
+    path = tmp_path / "text.pdf"
+    path.write_bytes(text_pdf_bytes)
+    return path

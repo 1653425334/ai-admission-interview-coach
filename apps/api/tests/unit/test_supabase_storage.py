@@ -41,6 +41,37 @@ def test_put_uploads_private_object_without_upsert() -> None:
     assert request.content == b"pdf bytes"
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "",
+        "../escape.pdf",
+        "user/app/../../../escape.pdf",
+        "/user/app/cv.pdf",
+        "user//app/cv.pdf",
+        "user/app/cv.pdf/",
+        r"user\app\cv.pdf",
+    ],
+)
+@pytest.mark.parametrize("operation", ["put", "delete"])
+def test_rejects_non_canonical_object_key_before_network(operation: str, key: str) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200)
+
+    storage = SupabaseObjectStorage(_settings(), transport=httpx.MockTransport(handler))
+
+    with pytest.raises(ValueError, match="canonical relative path"):
+        if operation == "put":
+            storage.put(key, b"pdf", "application/pdf")
+        else:
+            storage.delete(key)
+
+    assert requests == []
+
+
 def test_delete_calls_private_object_delete_endpoint() -> None:
     requests: list[httpx.Request] = []
 

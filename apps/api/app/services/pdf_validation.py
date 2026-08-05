@@ -7,8 +7,6 @@ from hashlib import sha256
 from io import BytesIO
 
 from pypdf import PdfReader
-from pypdf.errors import PyPdfError
-
 from app.core.errors import ApiError
 
 MAX_PDF_BYTES = 10 * 1024 * 1024
@@ -52,15 +50,24 @@ def validate_pdf(content: bytes, content_type: str | None) -> ValidatedPdf:
     content_sha256 = sha256(content).hexdigest()
 
     try:
-        reader = PdfReader(BytesIO(content), strict=True)
-    except (PyPdfError, ValueError, TypeError, OSError, KeyError, AttributeError, IndexError):
+        reader = PdfReader(BytesIO(content))
+    except Exception:
         raise _validation_error(
             status_code=422,
             code="INVALID_PDF",
             message="The PDF could not be read.",
         ) from None
 
-    if reader.is_encrypted:
+    try:
+        is_encrypted = reader.is_encrypted
+    except Exception:
+        raise _validation_error(
+            status_code=422,
+            code="INVALID_PDF",
+            message="The PDF could not be read.",
+        ) from None
+
+    if is_encrypted:
         raise _validation_error(
             status_code=422,
             code="ENCRYPTED_PDF_UNSUPPORTED",
@@ -69,7 +76,7 @@ def validate_pdf(content: bytes, content_type: str | None) -> ValidatedPdf:
 
     try:
         page_count = len(reader.pages)
-    except (PyPdfError, ValueError, TypeError, OSError, KeyError, AttributeError, IndexError):
+    except Exception:
         raise _validation_error(
             status_code=422,
             code="INVALID_PDF",
@@ -85,16 +92,7 @@ def validate_pdf(content: bytes, content_type: str | None) -> ValidatedPdf:
 
     try:
         has_text = any((page.extract_text() or "").strip() for page in reader.pages)
-    except (
-        PyPdfError,
-        ValueError,
-        TypeError,
-        OSError,
-        UnicodeError,
-        KeyError,
-        AttributeError,
-        IndexError,
-    ):
+    except Exception:
         raise _validation_error(
             status_code=422,
             code="INVALID_PDF",

@@ -32,6 +32,7 @@ class SupabaseObjectStorage:
         )
 
     def put(self, key: str, content: bytes, content_type: str) -> None:
+        _validate_object_key(key)
         bucket = quote(self._bucket, safe="")
         object_key = quote(key, safe="/")
         url = f"{self._base_url}/storage/v1/object/{bucket}/{object_key}"
@@ -47,6 +48,7 @@ class SupabaseObjectStorage:
             raise _storage_unavailable() from None
 
     def delete(self, key: str) -> None:
+        _validate_object_key(key)
         bucket = quote(self._bucket, safe="")
         url = f"{self._base_url}/storage/v1/object/{bucket}"
         try:
@@ -65,6 +67,15 @@ def _storage_unavailable() -> ApiError:
         code="STORAGE_UNAVAILABLE",
         message="Document storage is temporarily unavailable.",
     )
+
+
+def _validate_object_key(key: str) -> None:
+    """Reject non-canonical relative keys before constructing a provider URL."""
+    if not key or key.startswith("/") or key.endswith("/") or "\\" in key:
+        raise ValueError("Object key must be a canonical relative path")
+    segments = key.split("/")
+    if any(not segment or segment in {".", ".."} for segment in segments):
+        raise ValueError("Object key must be a canonical relative path")
 
 
 @lru_cache
