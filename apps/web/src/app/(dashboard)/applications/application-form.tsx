@@ -28,11 +28,18 @@ export default function ApplicationForm() {
     const form = event.currentTarget;
     if (!form.reportValidity()) return;
 
+    const data = new FormData(form);
+    const targetSchool = String(data.get("target_school") ?? "").trim();
+    const targetProgram = String(data.get("target_program") ?? "").trim();
+    if (!targetSchool || !targetProgram) {
+      setError("Target school and target program are required.");
+      return;
+    }
+
     submitting.current = true;
     setPending(true);
     setError(null);
 
-    const data = new FormData(form);
     try {
       const application = await apiFetch<ApplicationResponse>(
         "/api/v1/applications",
@@ -40,8 +47,8 @@ export default function ApplicationForm() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            target_school: String(data.get("target_school") ?? "").trim(),
-            target_program: String(data.get("target_program") ?? "").trim(),
+            target_school: targetSchool,
+            target_program: targetProgram,
           }),
         },
       );

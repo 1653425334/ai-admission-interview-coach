@@ -33,6 +33,18 @@ describe("ApplicationForm", () => {
     expect(mockApiFetch).not.toHaveBeenCalled();
   });
 
+  it("rejects whitespace-only values after trimming", async () => {
+    render(<ApplicationForm />);
+    await userEvent.type(screen.getByLabelText("Target school"), "   ");
+    await userEvent.type(screen.getByLabelText("Target program"), "   ");
+    await userEvent.click(screen.getByRole("button", { name: "Create application" }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Target school and target program are required.",
+    );
+    expect(mockApiFetch).not.toHaveBeenCalled();
+  });
+
   it("creates an application and navigates to its detail page", async () => {
     mockApiFetch.mockResolvedValue({ id: "app-1" } as never);
     render(<ApplicationForm />);

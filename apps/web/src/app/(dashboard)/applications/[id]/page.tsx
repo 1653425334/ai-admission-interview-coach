@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import DocumentUploadForm from "@/components/document-upload-form";
 import { ApiClientError, apiFetch } from "@/lib/api/client";
@@ -24,15 +24,27 @@ export default function ApplicationDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notFound, setNotFound] = useState(false);
+  const mounted = useRef(false);
+  const requestSequence = useRef(0);
 
-  const loadApplication = useCallback(async () => {
+  const loadApplication = useCallback(async (showLoading = false) => {
+    const sequence = ++requestSequence.current;
+    if (mounted.current && showLoading) {
+      setLoading(true);
+      setError(null);
+      setNotFound(false);
+    }
+
     try {
       const value = await apiFetch<ApplicationDetail>(
         `/api/v1/applications/${params.id}`,
       );
+      if (!mounted.current || sequence !== requestSequence.current) return;
       setApplication(value);
       setNotFound(false);
+      setError(null);
     } catch (caught) {
+      if (!mounted.current || sequence !== requestSequence.current) return;
       if (caught instanceof ApiClientError && caught.code === "AUTH_REQUIRED") {
         router.replace("/sign-in");
         return;
@@ -44,38 +56,22 @@ export default function ApplicationDetailPage() {
       }
       setError(errorText(caught));
     } finally {
-      setLoading(false);
+      if (mounted.current && sequence === requestSequence.current) {
+        setLoading(false);
+      }
     }
   }, [params.id, router]);
 
   useEffect(() => {
-    let active = true;
-    apiFetch<ApplicationDetail>(`/api/v1/applications/${params.id}`)
-      .then((value) => {
-        if (!active) return;
-        setApplication(value);
-        setNotFound(false);
-      })
-      .catch((caught: unknown) => {
-        if (!active) return;
-        if (caught instanceof ApiClientError && caught.code === "AUTH_REQUIRED") {
-          router.replace("/sign-in");
-          return;
-        }
-        if (caught instanceof ApiClientError && caught.status === 404) {
-          setNotFound(true);
-          setApplication(null);
-          return;
-        }
-        setError(errorText(caught));
-      })
-      .finally(() => {
-        if (active) setLoading(false);
-      });
+    mounted.current = true;
+    // The request only commits state asynchronously after the sequence guard.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadApplication(true);
     return () => {
-      active = false;
+      mounted.current = false;
+      requestSequence.current += 1;
     };
-  }, [params.id, router]);
+  }, [loadApplication]);
 
   if (loading) {
     return <main className="mx-auto max-w-4xl px-6 py-10" role="status">Loading application…</main>;
@@ -96,7 +92,7 @@ export default function ApplicationDetailPage() {
       <main className="mx-auto max-w-4xl space-y-3 px-6 py-10">
         <h1 className="text-2xl font-semibold">Application</h1>
         <p className="text-red-700" role="alert">{error ?? "The application could not be loaded."}</p>
-        <button className="rounded border px-3 py-2" type="button" onClick={() => { setError(null); setLoading(true); void loadApplication(); }}>
+        <button className="rounded border px-3 py-2" type="button" onClick={() => { void loadApplication(true); }}>
           Try again
         </button>
       </main>
@@ -121,7 +117,7 @@ export default function ApplicationDetailPage() {
             document={documentFor(type)}
             documentType={type}
             key={type}
-            onChanged={loadApplication}
+            onChanged={() => loadApplication()}
           />
         ))}
       </div>

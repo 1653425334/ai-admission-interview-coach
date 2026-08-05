@@ -1,32 +1,52 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 
 import { ApiClientError, apiFetch } from "@/lib/api/client";
 
 import ApplicationDetailPage from "./page";
 
-const { replace } = vi.hoisted(() => ({ replace: vi.fn() }));
+const { router } = vi.hoisted(() => {
+  const replace = vi.fn();
+  return { replace, router: { replace } };
+});
 vi.mock("next/navigation", () => ({
   useParams: () => ({ id: "app-1" }),
-  useRouter: () => ({ replace }),
+  useRouter: () => router,
 }));
 vi.mock("@/lib/api/client", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/api/client")>();
   return { ...original, apiFetch: vi.fn() };
 });
+vi.mock("@/components/document-upload-form", () => ({
+  default: ({
+    documentType,
+    document,
+    onChanged,
+  }: {
+    documentType: "CV" | "PS";
+    document?: { original_filename: string };
+    onChanged?: () => void | Promise<void>;
+  }) => (
+    <section>
+      <h2>{documentType}</h2>
+      <p>{document?.original_filename ?? `${documentType} empty`}</p>
+      <button type="button" onClick={() => { void onChanged?.(); }}>
+        Refresh {documentType}
+      </button>
+    </section>
+  ),
+}));
 const mockApiFetch = vi.mocked(apiFetch);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockApiFetch.mockReset();
+});
 
-it("shows loading then application details and separate document slots", async () => {
-  let resolve!: (value: unknown) => void;
-  mockApiFetch.mockReturnValue(new Promise((done) => { resolve = done; }) as never);
-  render(<ApplicationDetailPage />);
-  expect(screen.getByRole("status")).toHaveTextContent("Loading application…");
-
-  resolve({
+function application(targetSchool: string) {
+  return {
     id: "app-1",
-    target_school: "CUHK-Shenzhen",
+    target_school: targetSchool,
     target_program: "MSc AI",
     degree_type: null,
     status: "DRAFT",
@@ -42,12 +62,30 @@ it("shows loading then application details and separate document slots", async (
       parse_status: "UPLOADED",
       created_at: "2026-01-01T00:00:00Z",
     }],
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
   });
+  return { promise, resolve, reject };
+}
+
+it("shows loading then application details and separate document slots", async () => {
+  let resolve!: (value: unknown) => void;
+  mockApiFetch.mockReturnValue(new Promise((done) => { resolve = done; }) as never);
+  render(<ApplicationDetailPage />);
+  expect(screen.getByRole("status")).toHaveTextContent("Loading application…");
+
+  resolve(application("CUHK-Shenzhen"));
 
   expect(await screen.findByRole("heading", { name: "CUHK-Shenzhen" })).toBeInTheDocument();
   expect(screen.getByText("cv.pdf")).toBeInTheDocument();
-  expect(screen.getByLabelText("Personal statement PDF")).toBeEnabled();
-  expect(screen.queryByLabelText("CV PDF")).not.toBeInTheDocument();
+  expect(screen.getByText("PS empty")).toBeInTheDocument();
 });
 
 it("shows a not-found state for a missing or unowned application", async () => {
@@ -68,4 +106,60 @@ it("shows a safe non-404 load error and request ID", async () => {
     "Could not load application. Request ID: req-detail",
   );
   expect(screen.getByRole("button", { name: "Try again" })).toBeEnabled();
+});
+
+it("does not let an older refresh success overwrite the newest response", async () => {
+  mockApiFetch.mockResolvedValueOnce(application("Initial") as never);
+  render(<ApplicationDetailPage />);
+  expect(await screen.findByRole("heading", { name: "Initial" })).toBeInTheDocument();
+
+  const older = deferred<ReturnType<typeof application>>();
+  const newest = deferred<ReturnType<typeof application>>();
+  mockApiFetch.mockReturnValueOnce(older.promise as never).mockReturnValueOnce(newest.promise as never);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh CV" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh PS" }));
+
+  act(() => newest.resolve(application("Newest")));
+  expect(await screen.findByRole("heading", { name: "Newest" })).toBeInTheDocument();
+  act(() => older.resolve(application("Stale")));
+  await vi.waitFor(() => {
+    expect(screen.getByRole("heading", { name: "Newest" })).toBeInTheDocument();
+  });
+  expect(screen.getByRole("heading", { name: "Newest" })).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Stale" })).not.toBeInTheDocument();
+});
+
+it("does not let an older refresh rejection or finally overwrite the newest response", async () => {
+  mockApiFetch.mockResolvedValueOnce(application("Initial") as never);
+  render(<ApplicationDetailPage />);
+  expect(await screen.findByRole("heading", { name: "Initial" })).toBeInTheDocument();
+
+  const older = deferred<ReturnType<typeof application>>();
+  const newest = deferred<ReturnType<typeof application>>();
+  mockApiFetch.mockReturnValueOnce(older.promise as never).mockReturnValueOnce(newest.promise as never);
+  fireEvent.click(screen.getByRole("button", { name: "Refresh CV" }));
+  fireEvent.click(screen.getByRole("button", { name: "Refresh PS" }));
+
+  act(() => newest.resolve(application("Newest")));
+  expect(await screen.findByRole("heading", { name: "Newest" })).toBeInTheDocument();
+  act(() => older.reject(new ApiClientError("API_ERROR", "Stale failure.", "req-old", 500)));
+  await vi.waitFor(() => {
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+  expect(screen.getByRole("heading", { name: "Newest" })).toBeInTheDocument();
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
+});
+
+it("does not commit a pending response after unmount", async () => {
+  const pending = deferred<ReturnType<typeof application>>();
+  mockApiFetch.mockReturnValue(pending.promise as never);
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  const view = render(<ApplicationDetailPage />);
+  view.unmount();
+
+  act(() => pending.resolve(application("Too late")));
+  await Promise.resolve();
+  expect(consoleError).not.toHaveBeenCalled();
+  consoleError.mockRestore();
 });

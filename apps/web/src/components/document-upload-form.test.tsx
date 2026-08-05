@@ -59,6 +59,18 @@ describe("DocumentUploadForm", () => {
     expect(mockApiFetch).not.toHaveBeenCalled();
   });
 
+  it("allows a PDF exactly 10 MiB", async () => {
+    mockApiFetch.mockResolvedValue(document);
+    const file = new File(["%PDF"], "boundary.pdf", { type: "application/pdf" });
+    Object.defineProperty(file, "size", { value: MAX_PDF_BYTES });
+    render(<DocumentUploadForm applicationId="app-1" documentType="CV" />);
+
+    await userEvent.upload(screen.getByLabelText("CV PDF"), file);
+    await userEvent.click(screen.getByRole("button", { name: "Upload CV" }));
+
+    await vi.waitFor(() => expect(mockApiFetch).toHaveBeenCalledTimes(1));
+  });
+
   it("uploads multipart data without setting Content-Type and refreshes", async () => {
     mockApiFetch.mockResolvedValue(document);
     const changed = vi.fn();
