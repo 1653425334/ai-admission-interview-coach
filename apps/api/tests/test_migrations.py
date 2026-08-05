@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -128,7 +129,10 @@ def test_head_migration_creates_milestone_one_schema(migrated_engine: Engine) ->
     assert "CV" in checks["ck_documents_document_type"]
     assert "PS" in checks["ck_documents_document_type"]
     assert "ck_documents_parse_status" in checks
-    assert {"UPLOADED", "PARSING", "PARSED", "FAILED"} <= set(checks["ck_documents_parse_status"].replace("'", "").replace(",", " ").replace("(", " ").replace(")", " ").split())
+    parse_status_literals = set(
+        re.findall(r"'((?:''|[^'])*)'", checks["ck_documents_parse_status"])
+    )
+    assert parse_status_literals == {"UPLOADED", "PARSING", "PARSED", "FAILED"}
 
     unique_constraints = inspector.get_unique_constraints("documents")
     assert any(constraint["column_names"] == ["application_id", "document_type"] for constraint in unique_constraints)
