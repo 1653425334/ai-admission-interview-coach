@@ -5,6 +5,7 @@ from uuid import UUID, uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routes.health import router as health_router
+from app.api.routes.applications import router as applications_router
 from app.core.config import Settings, get_settings
 from app.core.errors import install_exception_handlers
 
@@ -35,6 +36,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     install_exception_handlers(app)
     app.include_router(health_router, prefix="/api/v1")
+    app.include_router(applications_router, prefix="/api/v1")
     return app
 
 
