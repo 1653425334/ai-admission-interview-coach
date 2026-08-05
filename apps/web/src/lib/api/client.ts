@@ -54,8 +54,28 @@ export async function apiFetch<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  const supabase = createBrowserSupabaseClient();
-  const { data, error } = await supabase.auth.getSession();
+  let supabase: ReturnType<typeof createBrowserSupabaseClient>;
+  try {
+    supabase = createBrowserSupabaseClient();
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new ApiClientError(
+      "CONFIGURATION_ERROR",
+      "The application is not configured correctly.",
+      null,
+      0,
+    );
+  }
+
+  let sessionResult: Awaited<ReturnType<typeof supabase.auth.getSession>>;
+  try {
+    sessionResult = await supabase.auth.getSession();
+  } catch (error) {
+    if (error instanceof ApiClientError) throw error;
+    throw new ApiClientError("NETWORK_ERROR", GENERIC_API_ERROR, null, 0);
+  }
+
+  const { data, error } = sessionResult;
   const accessToken = data.session?.access_token;
 
   if (error || !accessToken) {

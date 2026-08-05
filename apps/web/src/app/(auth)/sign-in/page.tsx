@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { createBrowserSupabaseClient } from "@/lib/supabase/client";
@@ -9,11 +9,14 @@ const SIGN_IN_ERROR = "邮箱或密码不正确，请重试。";
 
 export default function SignInPage() {
   const router = useRouter();
+  const submitting = useRef(false);
   const [pending, setPending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (submitting.current) return;
+    submitting.current = true;
     setPending(true);
     setErrorMessage(null);
 
@@ -36,6 +39,7 @@ export default function SignInPage() {
     } catch {
       setErrorMessage(SIGN_IN_ERROR);
     } finally {
+      submitting.current = false;
       setPending(false);
     }
   }

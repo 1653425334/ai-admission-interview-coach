@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const getSession = vi.fn();
+const { createBrowserSupabaseClient, getSession } = vi.hoisted(() => ({
+  createBrowserSupabaseClient: vi.fn(),
+  getSession: vi.fn(),
+}));
 
 vi.mock("@/lib/supabase/client", () => ({
-  createBrowserSupabaseClient: () => ({ auth: { getSession } }),
+  createBrowserSupabaseClient,
 }));
 
 import { ApiClientError, apiFetch } from "./client";
@@ -18,7 +21,9 @@ function session(accessToken: string | null = "token-123") {
 describe("apiFetch", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    createBrowserSupabaseClient.mockReset();
     getSession.mockReset();
+    createBrowserSupabaseClient.mockReturnValue({ auth: { getSession } });
     process.env.NEXT_PUBLIC_API_BASE_URL = "http://localhost:8000/";
     session();
   });
@@ -49,6 +54,42 @@ describe("apiFetch", () => {
       status: 401,
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("maps browser client configuration failures safely", async () => {
+    createBrowserSupabaseClient.mockImplementation(() => {
+      throw new Error("invalid public configuration details");
+    });
+
+    await expect(apiFetch("/api/v1/applications")).rejects.toMatchObject({
+      code: "CONFIGURATION_ERROR",
+      message: "The application is not configured correctly.",
+      requestId: null,
+      status: 0,
+    });
+  });
+
+  it("maps rejected session lookups to a safe network error", async () => {
+    getSession.mockRejectedValue(new Error("refresh token network details"));
+
+    await expect(apiFetch("/api/v1/applications")).rejects.toMatchObject({
+      code: "NETWORK_ERROR",
+      message: "The request could not be completed. Please try again.",
+      status: 0,
+    });
+  });
+
+  it("treats a resolved session error as requiring authentication", async () => {
+    getSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: "provider auth details" },
+    });
+
+    await expect(apiFetch("/api/v1/applications")).rejects.toMatchObject({
+      code: "AUTH_REQUIRED",
+      message: "Please sign in to continue.",
+      status: 401,
+    });
   });
 
   it("maps the approved API error envelope", async () => {
@@ -94,6 +135,44 @@ describe("apiFetch", () => {
       status: 0,
       message: "The request could not be completed. Please try again.",
     });
+  });
+
+  it("returns undefined for a successful 204 response", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 204 }));
+
+    await expect(apiFetch<void>("/api/v1/documents/document-1")).resolves.toBeUndefined();
+  });
+
+  it("maps a non-JSON success response to INVALID_RESPONSE", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not-json", {
+        status: 200,
+        headers: { "X-Request-ID": "req-success" },
+      }),
+    );
+
+    await expect(apiFetch("/api/v1/applications")).rejects.toMatchObject({
+      code: "INVALID_RESPONSE",
+      requestId: "req-success",
+      status: 200,
+    });
+  });
+
+  it("preserves the caller method, body, and abort signal", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+    const controller = new AbortController();
+    const body = JSON.stringify({ target_school: "Example" });
+
+    await apiFetch("/api/v1/applications", {
+      method: "POST",
+      body,
+      signal: controller.signal,
+    });
+
+    const [, requestInit] = fetchMock.mock.calls[0];
+    expect(requestInit).toMatchObject({ method: "POST", body, signal: controller.signal });
   });
 
   it("does not set a multipart content type or boundary", async () => {
