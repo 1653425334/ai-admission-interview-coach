@@ -18,10 +18,13 @@ class SupabaseObjectStorage:
     def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
         self._base_url = settings.supabase_url.rstrip("/")
         self._bucket = settings.supabase_storage_bucket
-        self._headers = {
-            "Authorization": f"Bearer {settings.supabase_service_role_key}",
-            "apikey": settings.supabase_service_role_key,
-        }
+        storage_admin_key = settings.supabase_service_role_key
+        self._headers = {"apikey": storage_admin_key}
+        # New sb_secret_* keys are opaque API keys, not JWTs, and must not be
+        # sent as bearer tokens. Keep legacy service_role JWT compatibility
+        # while projects migrate to Supabase's current key format.
+        if not storage_admin_key.startswith("sb_secret_"):
+            self._headers["Authorization"] = f"Bearer {storage_admin_key}"
         self._transport = transport
 
     def _client(self) -> httpx.Client:

@@ -18,6 +18,33 @@ def _settings() -> Settings:
     )
 
 
+def _settings_with_new_secret_key() -> Settings:
+    return Settings(
+        database_url="postgresql://test:test@localhost/test",
+        supabase_url="https://project.supabase.co/",
+        supabase_storage_bucket="private-documents",
+        supabase_service_role_key="sb_secret_server-only",
+    )
+
+
+def test_new_secret_key_uses_apikey_header_without_bearer_token() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"Key": "object"})
+
+    storage = SupabaseObjectStorage(
+        _settings_with_new_secret_key(), transport=httpx.MockTransport(handler)
+    )
+
+    storage.put("user/app/cv.pdf", b"pdf bytes", "application/pdf")
+
+    request = requests[0]
+    assert request.headers["apikey"] == "sb_secret_server-only"
+    assert "authorization" not in request.headers
+
+
 def test_put_uploads_private_object_without_upsert() -> None:
     requests: list[httpx.Request] = []
 

@@ -77,20 +77,20 @@ The following values are required. `.env.example` contains only placeholders and
 | `SUPABASE_URL` | API | Supabase project URL for JWT validation/storage |
 | `SUPABASE_JWT_AUDIENCE` | API | Usually `authenticated` |
 | `SUPABASE_STORAGE_BUCKET` | API | Private bucket name, e.g. `application-documents` |
-| `SUPABASE_SERVICE_ROLE_KEY` | API only | Server-side Storage credential; never expose it or prefix it `NEXT_PUBLIC_` |
+| `SUPABASE_SERVICE_ROLE_KEY` | API only | Prefer the current `sb_secret_...` server key; the legacy `service_role` JWT also works. Never expose either value or prefix it `NEXT_PUBLIC_` |
 | `NEXT_PUBLIC_SUPABASE_URL` | Web | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Web | Browser publishable/anon key, never the service-role key |
 | `NEXT_PUBLIC_API_BASE_URL` | Web | FastAPI base URL, normally `http://localhost:8000` |
 
-Next.js reads its local environment file from its application directory. Create `apps/web/.env.local` with only the three `NEXT_PUBLIC_*` entries above (the same public values from root `.env`); do not copy `SUPABASE_SERVICE_ROLE_KEY` into that file.
+Next.js reads its local environment file from its application directory. Create `apps/web/.env.local` with only the three `NEXT_PUBLIC_*` entries above (the same public values from root `.env`); do not copy the server secret into that file.
 
 ## Supabase setup
 
 1. In **Authentication → Providers**, enable Email and configure email/password sign-in for the local project. Create two test users (A and B), completing email confirmation if the project requires it.
 2. In **Storage**, create the bucket named by `SUPABASE_STORAGE_BUCKET` and keep it **private**. Do not make the bucket public.
-3. Copy the project URL to both Supabase URL variables. Put the publishable key only in `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`; put the service-role key only in the root API `.env` as `SUPABASE_SERVICE_ROLE_KEY`.
+3. Copy the project URL to both Supabase URL variables. Put the publishable key only in `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Put a current `sb_secret_...` key only in the root API `.env` as `SUPABASE_SERVICE_ROLE_KEY`; a legacy `service_role` JWT remains supported during migration.
 
-The service-role key bypasses Storage access controls and is used only by FastAPI after it has verified the caller's JWT and ownership. It must never be committed, sent to the browser, logged, or used as a publishable key.
+The server secret bypasses Storage access controls and is used only by FastAPI after it has verified the caller's JWT and ownership. It must never be committed, sent to the browser, logged, or used as a publishable key.
 
 ## Migrate and run
 
