@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
+from threading import Lock
+import time
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +17,9 @@ from app.core.config import Settings, get_settings
 from app.core.errors import ApiError
 
 _bearer_scheme = HTTPBearer(auto_error=False)
+JWKS_CACHE_TTL_SECONDS = 300.0
+_jwks_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_jwks_cache_lock = Lock()
 
 
 @dataclass(frozen=True)
@@ -28,9 +32,8 @@ def _jwks_url(settings: Settings) -> str:
     return f"{settings.supabase_url.rstrip('/')}/auth/v1/.well-known/jwks.json"
 
 
-@lru_cache(maxsize=8)
-def get_jwks(url: str) -> dict[str, Any]:
-    """Fetch and cache a provider JWKS document without retaining any JWTs."""
+def _fetch_jwks(url: str) -> dict[str, Any]:
+    """Fetch one provider JWKS document without retaining JWTs or error bodies."""
     try:
         response = httpx.get(url, timeout=5.0)
         response.raise_for_status()
@@ -42,6 +45,46 @@ def get_jwks(url: str) -> dict[str, Any]:
     if not isinstance(document, dict) or not isinstance(document.get("keys"), list):
         raise ApiError(503, "AUTH_UNAVAILABLE", "Authentication is temporarily unavailable.")
     return document
+
+
+def clear_jwks_cache() -> None:
+    """Clear cached public keys; exposed for deterministic tests and process control."""
+    with _jwks_cache_lock:
+        _jwks_cache.clear()
+
+
+def get_jwks(
+    url: str,
+    *,
+    force_refresh: bool = False,
+    previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a bounded-TTL JWKS cache, refreshing an unknown key ID at most once.
+
+    Holding the small lock during a network fetch prevents concurrent requests that
+    saw the same old key set from stampeding the identity provider during rotation.
+    """
+    with _jwks_cache_lock:
+        now = time.monotonic()
+        cached = _jwks_cache.get(url)
+        if cached is not None:
+            cached_at, document = cached
+            if not force_refresh and now - cached_at < JWKS_CACHE_TTL_SECONDS:
+                return document
+            if force_refresh and previous is not None and document is not previous:
+                return document
+
+        document = _fetch_jwks(url)
+        _jwks_cache[url] = (now, document)
+        return document
+
+
+# Keep the former cache-clearing test seam while using an explicit TTL cache.
+get_jwks.cache_clear = clear_jwks_cache  # type: ignore[attr-defined]
+
+
+class _UnknownKeyId(Exception):
+    """A syntactically valid token named a key absent from the current JWKS."""
 
 
 def _verification_key(token: str, jwks: dict[str, Any]) -> Any:
@@ -60,7 +103,7 @@ def _verification_key(token: str, jwks: dict[str, Any]) -> Any:
                 return jwt.PyJWK.from_dict(key_data).key
             except (jwt.PyJWTError, ValueError, TypeError):
                 break
-    raise ApiError(401, "AUTH_INVALID_TOKEN", "Invalid authentication token.")
+    raise _UnknownKeyId
 
 
 def get_current_principal(
@@ -72,7 +115,17 @@ def get_current_principal(
         raise ApiError(401, "AUTH_REQUIRED", "A bearer token is required.")
 
     try:
-        key = _verification_key(credentials.credentials, get_jwks(_jwks_url(settings)))
+        jwks_url = _jwks_url(settings)
+        current_jwks = get_jwks(jwks_url)
+        try:
+            key = _verification_key(credentials.credentials, current_jwks)
+        except _UnknownKeyId:
+            # A rotated key may not yet be in the TTL cache.  Refresh once only;
+            # a still-unknown key is an invalid token rather than a retry loop.
+            key = _verification_key(
+                credentials.credentials,
+                get_jwks(jwks_url, force_refresh=True, previous=current_jwks),
+            )
         claims = jwt.decode(
             credentials.credentials,
             key=key,
@@ -83,7 +136,7 @@ def get_current_principal(
         )
     except ApiError:
         raise
-    except jwt.PyJWTError:
+    except (_UnknownKeyId, jwt.PyJWTError):
         raise ApiError(401, "AUTH_INVALID_TOKEN", "Invalid authentication token.") from None
 
     subject = claims.get("sub")

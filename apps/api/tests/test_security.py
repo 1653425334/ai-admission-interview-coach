@@ -62,6 +62,7 @@ def make_token(
     signing_key: rsa.RSAPrivateKey,
     settings: Settings,
     user_id: str,
+    kid: str = "test-key",
     **claims: object,
 ) -> str:
     payload: dict[str, object] = {
@@ -72,7 +73,7 @@ def make_token(
         "exp": datetime.now(UTC) + timedelta(minutes=5),
     }
     payload.update(claims)
-    return jwt.encode(payload, signing_key, algorithm="RS256", headers={"kid": "test-key"})
+    return jwt.encode(payload, signing_key, algorithm="RS256", headers={"kid": kid})
 
 
 def auth_headers(token: str) -> dict[str, str]:
@@ -238,6 +239,13 @@ def test_jwks_network_and_json_failures_are_safe(monkeypatch: pytest.MonkeyPatch
     assert json_error.value.status_code == 503
     assert json_error.value.code == "AUTH_UNAVAILABLE"
 
+    security.get_jwks.cache_clear()
+    monkeypatch.setattr(security.httpx, "get", lambda url, *, timeout: _JwksResponse({"keys": "invalid"}))
+    with pytest.raises(ApiError) as malformed_error:
+        security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json")
+    assert malformed_error.value.status_code == 503
+    assert malformed_error.value.code == "AUTH_UNAVAILABLE"
+
 
 def test_jwks_response_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.core import security
@@ -256,3 +264,139 @@ def test_jwks_response_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     assert security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json") == document
     assert security.get_jwks("https://project.supabase.co/auth/v1/.well-known/jwks.json") == document
     assert calls == 1
+
+
+def _jwks_for_key(signing_key: rsa.RSAPrivateKey, kid: str) -> dict[str, object]:
+    public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key()))
+    public_jwk.update({"kid": kid, "use": "sig", "alg": "RS256"})
+    return {"keys": [public_jwk]}
+
+
+def test_jwks_cache_refreshes_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import security
+
+    security.clear_jwks_cache()
+    now = 100.0
+    calls = 0
+    documents = [{"keys": [{"kid": "first"}]}, {"keys": [{"kid": "second"}]}]
+
+    def clock() -> float:
+        return now
+
+    def fetch(url: str, *, timeout: float) -> _JwksResponse:
+        nonlocal calls
+        response = _JwksResponse(documents[calls])
+        calls += 1
+        return response
+
+    monkeypatch.setattr(security.time, "monotonic", clock)
+    monkeypatch.setattr(security.httpx, "get", fetch)
+    url = "https://project.supabase.co/auth/v1/.well-known/jwks.json"
+
+    assert security.get_jwks(url) == documents[0]
+    assert security.get_jwks(url) == documents[0]
+    now += security.JWKS_CACHE_TTL_SECONDS + 0.1
+    assert security.get_jwks(url) == documents[1]
+    assert calls == 2
+
+
+def test_unknown_kid_forces_one_refresh_and_accepts_rotated_key(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    user_id: UUID,
+) -> None:
+    from app.core import security
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    old_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    new_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    documents = [_jwks_for_key(old_key, "old"), _jwks_for_key(new_key, "new")]
+    calls = 0
+    security.clear_jwks_cache()
+
+    def fetch(url: str, *, timeout: float) -> _JwksResponse:
+        nonlocal calls
+        response = _JwksResponse(documents[calls])
+        calls += 1
+        return response
+
+    monkeypatch.setattr(security.httpx, "get", fetch)
+    principal = security.get_current_principal(
+        credentials=HTTPAuthorizationCredentials(
+            scheme="Bearer",
+            credentials=make_token(new_key, settings, str(user_id), kid="new"),
+        ),
+        settings=settings,
+    )
+
+    assert principal.user_id == user_id
+    assert calls == 2
+
+
+def test_unknown_kid_after_one_refresh_is_stable_401(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    user_id: UUID,
+) -> None:
+    from app.core import security
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    cached_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    unknown_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    document = _jwks_for_key(cached_key, "cached")
+    calls = 0
+    security.clear_jwks_cache()
+
+    def fetch(url: str, *, timeout: float) -> _JwksResponse:
+        nonlocal calls
+        calls += 1
+        return _JwksResponse(document)
+
+    monkeypatch.setattr(security.httpx, "get", fetch)
+    with pytest.raises(ApiError) as error:
+        security.get_current_principal(
+            credentials=HTTPAuthorizationCredentials(
+                scheme="Bearer",
+                credentials=make_token(unknown_key, settings, str(user_id), kid="missing"),
+            ),
+            settings=settings,
+        )
+
+    assert error.value.status_code == 401
+    assert error.value.code == "AUTH_INVALID_TOKEN"
+    assert calls == 2
+
+
+def test_unknown_kid_refresh_network_failure_is_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    settings: Settings,
+    user_id: UUID,
+) -> None:
+    from app.core import security
+    from fastapi.security import HTTPAuthorizationCredentials
+
+    cached_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    unknown_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    security.clear_jwks_cache()
+    calls = 0
+
+    def fetch(url: str, *, timeout: float) -> _JwksResponse:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _JwksResponse(_jwks_for_key(cached_key, "cached"))
+        raise security.httpx.ConnectError("provider host unavailable")
+
+    monkeypatch.setattr(security.httpx, "get", fetch)
+    with pytest.raises(ApiError) as error:
+        security.get_current_principal(
+            credentials=HTTPAuthorizationCredentials(
+                scheme="Bearer",
+                credentials=make_token(unknown_key, settings, str(user_id), kid="missing"),
+            ),
+            settings=settings,
+        )
+
+    assert error.value.status_code == 503
+    assert error.value.code == "AUTH_UNAVAILABLE"
+    assert "host unavailable" not in error.value.message

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 import unicodedata
+from hashlib import sha256
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -177,7 +178,7 @@ def _best_effort_delete(storage: ObjectStorage, storage_key: str, request_id: st
     except Exception:
         # Deliberately omit provider errors, file content, and credentials.
         logger.warning(
-            "document_upload_cleanup_failed request_id=%s storage_key=%s",
+            "document_upload_cleanup_failed request_id=%s storage_key_sha256=%s",
             request_id,
-            storage_key,
+            sha256(storage_key.encode("utf-8")).hexdigest()[:16],
         )

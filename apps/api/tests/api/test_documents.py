@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -20,6 +22,7 @@ from app.db.alembic_config import configparser_safe_url
 from app.db.models.document import Document
 from app.db.session import get_db
 from app.main import create_app
+from app.services.documents import _best_effort_delete
 from app.services.pdf_validation import MAX_PDF_BYTES
 from app.storage.supabase import get_object_storage
 
@@ -239,8 +242,25 @@ def test_read_is_limited_and_oversize_does_not_write_storage(
     )
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "FILE_TOO_LARGE"
+    # This is below the multipart transport cap, so the route applies the exact
+    # file-size rule after parsing without reading beyond its 10 MiB + 1 bound.
     assert read_sizes == [MAX_PDF_BYTES + 1]
     assert fake_storage.put_calls == []
+
+
+def test_exact_10_mib_pdf_multipart_reaches_route_and_succeeds(
+    client_for_user: Callable[[str], TestClient],
+    text_pdf_bytes: bytes,
+    fake_storage: FakeStorage,
+) -> None:
+    content = text_pdf_bytes + b"\x00" * (MAX_PDF_BYTES - len(text_pdf_bytes))
+    client = client_for_user("a")
+
+    response = _upload(client, _create_application(client), content)
+
+    assert response.status_code == 201
+    assert response.json()["size_bytes"] == MAX_PDF_BYTES
+    assert fake_storage.put_calls[0][1] == content
 
 
 def test_duplicate_type_is_stable_conflict_without_second_storage_write(
@@ -320,6 +340,38 @@ def test_database_failure_cleans_uploaded_object(
     assert fake_storage.delete_calls == [fake_storage.put_calls[0][0]]
     assert fake_storage.objects == {}
     assert _document_count(integration_engine) == 0
+
+
+def test_cleanup_warning_uses_storage_key_fingerprint_only(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    storage = FakeStorage()
+    storage.delete_error = RuntimeError("storage cleanup unavailable")
+    request_id = str(uuid4())
+    storage_key = "private-user/application/document/resume-secret.pdf"
+    documents_logger = logging.getLogger("app.services.documents")
+    previous_level = documents_logger.level
+    previous_disabled = documents_logger.disabled
+    previous_disable_level = logging.root.manager.disable
+    logging.disable(logging.NOTSET)
+    caplog.set_level(logging.WARNING, logger=documents_logger.name)
+    documents_logger.disabled = False
+    documents_logger.addHandler(caplog.handler)
+    try:
+        _best_effort_delete(storage, storage_key, request_id)
+        log_text = caplog.text
+    finally:
+        documents_logger.removeHandler(caplog.handler)
+        documents_logger.setLevel(previous_level)
+        documents_logger.disabled = previous_disabled
+        logging.disable(previous_disable_level)
+
+    fingerprint = hashlib.sha256(storage_key.encode("utf-8")).hexdigest()[:16]
+    assert storage.delete_calls == [storage_key]
+    assert request_id in log_text
+    assert f"storage_key_sha256={fingerprint}" in log_text
+    assert storage_key not in log_text
+    assert "resume-secret.pdf" not in log_text
 
 
 @pytest.mark.parametrize("failing_operation", ["flush", "refresh"])

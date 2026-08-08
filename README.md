@@ -118,7 +118,7 @@ Run the web app in another terminal:
 pnpm --filter web dev
 ```
 
-Open `http://localhost:3000`, sign in, and create an application before uploading a CV or PS. Each upload must be a text-based PDF, no larger than 10 MB and no more than 30 pages. Scanned, encrypted, malformed, oversized, and over-length PDFs are rejected.
+Open `http://localhost:3000`, sign in, and create an application before uploading a CV or PS. Each upload must be a text-based PDF, no larger than 10 MB and no more than 30 pages. Scanned, encrypted, malformed, oversized, and over-length PDFs are rejected. The API also applies a 10 MB plus 64 KiB ingress cap to the whole multipart request before it is spooled; this transport cap permits multipart boundaries and form headers, while the route remains the exact 10 MB file-size authority.
 
 ## Verification
 
