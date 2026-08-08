@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import ec, rsa
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
@@ -166,6 +166,75 @@ def test_valid_token_returns_principal(client: TestClient, signing_key: rsa.RSAP
 
     assert response.status_code == 200
     assert response.json() == {"user_id": str(user_id), "email": "applicant@example.com"}
+
+
+def test_valid_es256_token_returns_principal(
+    settings: Settings, user_id: UUID, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core import security
+
+    signing_key = ec.generate_private_key(ec.SECP256R1())
+    public_jwk = json.loads(
+        jwt.algorithms.ECAlgorithm.to_jwk(signing_key.public_key())
+    )
+    public_jwk.update({"kid": "es256-key", "use": "sig", "alg": "ES256"})
+    monkeypatch.setattr(
+        security, "get_jwks", lambda _: {"keys": [public_jwk]}
+    )
+    payload = {
+        "sub": str(user_id),
+        "email": "applicant@example.com",
+        "aud": settings.supabase_jwt_audience,
+        "iss": f"{settings.supabase_url}/auth/v1",
+        "exp": datetime.now(UTC) + timedelta(minutes=5),
+    }
+    token = jwt.encode(
+        payload, signing_key, algorithm="ES256", headers={"kid": "es256-key"}
+    )
+
+    principal = security.get_current_principal(
+        credentials=security.HTTPAuthorizationCredentials(
+            scheme="Bearer", credentials=token
+        ),
+        settings=settings,
+    )
+
+    assert principal.user_id == user_id
+    assert principal.email == "applicant@example.com"
+
+
+def test_jwk_algorithm_mismatch_is_rejected_without_refresh(
+    signing_key: rsa.RSAPrivateKey,
+    settings: Settings,
+    user_id: UUID,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core import security
+
+    public_jwk = json.loads(
+        jwt.algorithms.RSAAlgorithm.to_jwk(signing_key.public_key())
+    )
+    public_jwk.update({"kid": "test-key", "use": "sig", "alg": "ES256"})
+    calls = 0
+
+    def get_mismatched_jwks(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"keys": [public_jwk]}
+
+    monkeypatch.setattr(security, "get_jwks", get_mismatched_jwks)
+
+    with pytest.raises(ApiError) as error:
+        security.get_current_principal(
+            credentials=security.HTTPAuthorizationCredentials(
+                scheme="Bearer",
+                credentials=make_token(signing_key, settings, str(user_id)),
+            ),
+            settings=settings,
+        )
+
+    assert error.value.code == "AUTH_INVALID_TOKEN"
+    assert calls == 1
 
 
 def test_token_with_an_invalid_signature_is_rejected(

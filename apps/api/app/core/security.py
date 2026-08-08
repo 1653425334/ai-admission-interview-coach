@@ -18,6 +18,7 @@ from app.core.errors import ApiError
 
 _bearer_scheme = HTTPBearer(auto_error=False)
 JWKS_CACHE_TTL_SECONDS = 300.0
+_ALLOWED_JWT_ALGORITHMS = {"RS256": "RSA", "ES256": "EC"}
 _jwks_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _jwks_cache_lock = Lock()
 
@@ -87,22 +88,31 @@ class _UnknownKeyId(Exception):
     """A syntactically valid token named a key absent from the current JWKS."""
 
 
-def _verification_key(token: str, jwks: dict[str, Any]) -> Any:
+def _verification_key(token: str, jwks: dict[str, Any]) -> tuple[Any, str]:
     try:
         header = jwt.get_unverified_header(token)
         key_id = header.get("kid")
+        algorithm = header.get("alg")
     except jwt.PyJWTError:
         raise ApiError(401, "AUTH_INVALID_TOKEN", "Invalid authentication token.") from None
 
-    if not isinstance(key_id, str):
+    if not isinstance(key_id, str) or algorithm not in _ALLOWED_JWT_ALGORITHMS:
         raise ApiError(401, "AUTH_INVALID_TOKEN", "Invalid authentication token.")
 
     for key_data in jwks["keys"]:
         if isinstance(key_data, dict) and key_data.get("kid") == key_id:
+            if (
+                key_data.get("kty") != _ALLOWED_JWT_ALGORITHMS[algorithm]
+                or key_data.get("alg") not in {None, algorithm}
+                or key_data.get("use") not in {None, "sig"}
+            ):
+                raise ApiError(401, "AUTH_INVALID_TOKEN", "Invalid authentication token.")
             try:
-                return jwt.PyJWK.from_dict(key_data).key
+                return jwt.PyJWK.from_dict(key_data, algorithm=algorithm).key, algorithm
             except (jwt.PyJWTError, ValueError, TypeError):
-                break
+                raise ApiError(
+                    401, "AUTH_INVALID_TOKEN", "Invalid authentication token."
+                ) from None
     raise _UnknownKeyId
 
 
@@ -110,7 +120,7 @@ def get_current_principal(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer_scheme),
     settings: Settings = Depends(get_settings),
 ) -> AuthPrincipal:
-    """Validate a signed Supabase RS256 access token and return its principal."""
+    """Validate a signed Supabase RS256/ES256 access token and return its principal."""
     if credentials is None or credentials.scheme.lower() != "bearer":
         raise ApiError(401, "AUTH_REQUIRED", "A bearer token is required.")
 
@@ -118,18 +128,18 @@ def get_current_principal(
         jwks_url = _jwks_url(settings)
         current_jwks = get_jwks(jwks_url)
         try:
-            key = _verification_key(credentials.credentials, current_jwks)
+            key, algorithm = _verification_key(credentials.credentials, current_jwks)
         except _UnknownKeyId:
             # A rotated key may not yet be in the TTL cache.  Refresh once only;
             # a still-unknown key is an invalid token rather than a retry loop.
-            key = _verification_key(
+            key, algorithm = _verification_key(
                 credentials.credentials,
                 get_jwks(jwks_url, force_refresh=True, previous=current_jwks),
             )
         claims = jwt.decode(
             credentials.credentials,
             key=key,
-            algorithms=["RS256"],
+            algorithms=[algorithm],
             audience=settings.supabase_jwt_audience,
             issuer=f"{settings.supabase_url.rstrip('/')}/auth/v1",
             options={"require": ["exp", "sub"]},
