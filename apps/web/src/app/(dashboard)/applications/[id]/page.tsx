@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import DocumentUploadForm from "@/components/document-upload-form";
+import MaterialAnalysisPanel from "@/components/material-analysis-panel";
 import { ApiClientError, apiFetch } from "@/lib/api/client";
 import type { ApplicationDetail, DocumentType } from "@/types/api";
 
@@ -101,6 +102,7 @@ export default function ApplicationDetailPage() {
 
   const documentFor = (type: DocumentType) =>
     application.documents.find((document) => document.document_type === type);
+  const hasRequiredDocuments = Boolean(documentFor("CV") && documentFor("PS"));
 
   return (
     <main className="mx-auto w-full max-w-4xl space-y-8 px-6 py-10">
@@ -121,6 +123,10 @@ export default function ApplicationDetailPage() {
           />
         ))}
       </div>
+      <MaterialAnalysisPanel
+        applicationId={application.id}
+        hasRequiredDocuments={hasRequiredDocuments}
+      />
     </main>
   );
 }
