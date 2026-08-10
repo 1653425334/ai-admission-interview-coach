@@ -31,6 +31,7 @@ from app.services.document_extraction import DocumentExtractionService
 from app.services.documents import delete_owned_document
 from app.services.material_analysis import MaterialAnalysisPipeline
 from app.workers.analysis_worker import DurableAnalysisWorker
+from app.workers.run_analysis_worker import build_analysis_worker
 from tests.pdf_factory import build_pdf
 
 
@@ -173,6 +174,21 @@ def test_same_input_reuses_analysis_run_and_job(
         assert db.scalar(select(Job).where(Job.entity_id == first.analysis_run.id)) is not None
         assert first.analysis_run.input_manifest_json["parser_version"] == "pdf-text-v1"
         assert first.analysis_run.schema_version == "interview-map-v1"
+
+
+def test_runtime_factory_consumes_a_job_with_the_fake_pipeline(
+    session_factory: sessionmaker[Session],
+) -> None:
+    _user_id, application_id, _cv_id, _ps_id, storage = _seed_application(session_factory)
+    analysis_run_id = _create_run(session_factory, application_id)
+
+    assert build_analysis_worker(session_factory=session_factory, storage=storage).run_once() is True
+
+    with session_factory() as db:
+        run = db.get(AnalysisRun, analysis_run_id)
+        assert run is not None
+        assert run.status == "COMPLETED"
+        assert run.interview_map_json is not None
 
 
 def test_claiming_prevents_two_workers_from_processing_same_job(

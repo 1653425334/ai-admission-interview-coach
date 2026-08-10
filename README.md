@@ -112,6 +112,21 @@ Pop-Location
 
 `http://localhost:8000/api/v1/health` should return `{"status":"ok"}`.
 
+Run the durable material-analysis worker in a second API terminal:
+
+```powershell
+Push-Location apps/api
+uv run python -m app.workers.run_analysis_worker
+Pop-Location
+```
+
+The worker uses the same root `.env` as FastAPI, so it requires a migrated
+`DATABASE_URL` and valid private Supabase Storage settings. It intentionally
+uses the offline Fake LLM in M2, so this local workflow does not make a model
+or network call beyond reading the already-private uploaded PDFs from Storage.
+Keep this process running while testing the analysis UI. For a one-job smoke
+test, use `uv run python -m app.workers.run_analysis_worker --once`.
+
 Run the web app in another terminal:
 
 ```powershell
