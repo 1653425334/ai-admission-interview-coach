@@ -15,9 +15,11 @@ from time import sleep
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.fake_interview_map import FakeInterviewMapLLM
+from app.ai.deepseek_interview_map import DeepSeekInterviewMapLLM
+from app.core.config import get_settings
 from app.db.session import get_session_factory
 from app.services.document_extraction import DocumentExtractionService
-from app.services.material_analysis import MaterialAnalysisPipeline
+from app.services.material_analysis import InterviewMapGenerator, MaterialAnalysisPipeline
 from app.storage.base import ObjectStorage
 from app.storage.supabase import get_object_storage
 from app.workers.analysis_worker import DurableAnalysisWorker
@@ -31,15 +33,28 @@ def build_analysis_worker(
     *,
     session_factory: sessionmaker[Session] | None = None,
     storage: ObjectStorage | None = None,
+    llm: InterviewMapGenerator | None = None,
 ) -> DurableAnalysisWorker:
     """Compose the existing local runtime dependencies for one worker process."""
 
+    if llm is None:
+        settings = get_settings()
+        if settings.llm_mode == "deepseek":
+            if not settings.deepseek_api_key:
+                raise RuntimeError("DEEPSEEK_API_KEY is required when LLM_MODE=deepseek")
+            llm = DeepSeekInterviewMapLLM(
+                api_key=settings.deepseek_api_key,
+                model=settings.deepseek_model,
+                base_url=settings.deepseek_base_url,
+            )
+        else:
+            llm = FakeInterviewMapLLM()
     return DurableAnalysisWorker(
         session_factory=session_factory or get_session_factory(),
         storage=storage or get_object_storage(),
         pipeline=MaterialAnalysisPipeline(
             extraction_service=DocumentExtractionService(),
-            llm=FakeInterviewMapLLM(),
+            llm=llm,
         ),
     )
 

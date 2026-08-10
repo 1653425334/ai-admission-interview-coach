@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -15,6 +16,10 @@ class Settings(BaseSettings):
     supabase_jwt_audience: str = "authenticated"
     supabase_storage_bucket: str = "application-documents"
     supabase_service_role_key: str
+    llm_mode: Literal["fake", "deepseek"] = "fake"
+    deepseek_api_key: str | None = None
+    deepseek_model: str = "deepseek-v4-flash"
+    deepseek_base_url: str = "https://api.deepseek.com"
 
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 

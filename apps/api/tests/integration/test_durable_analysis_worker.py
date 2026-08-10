@@ -182,7 +182,9 @@ def test_runtime_factory_consumes_a_job_with_the_fake_pipeline(
     _user_id, application_id, _cv_id, _ps_id, storage = _seed_application(session_factory)
     analysis_run_id = _create_run(session_factory, application_id)
 
-    assert build_analysis_worker(session_factory=session_factory, storage=storage).run_once() is True
+    assert build_analysis_worker(
+        session_factory=session_factory, storage=storage, llm=FakeInterviewMapLLM()
+    ).run_once() is True
 
     with session_factory() as db:
         run = db.get(AnalysisRun, analysis_run_id)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import logging
 from time import perf_counter
 from typing import Callable
 from uuid import UUID
@@ -15,6 +16,7 @@ from app.db.models.analysis_run import AnalysisRun
 from app.db.models.document import Document
 from app.db.models.job import Job
 from app.db.models.llm_run import LlmRun
+from app.ai.deepseek_interview_map import DeepSeekInvalidResponseError
 from app.parsers.pdf_text import PdfTextExtractionError
 from app.schemas.interview_map import DocumentType, InterviewMap
 from app.services.analysis_runs import input_manifest_matches_current_documents
@@ -31,6 +33,7 @@ from app.storage.base import ObjectStorage
 
 MAX_JOB_ATTEMPTS = 3
 DEFAULT_LOCK_TIMEOUT = timedelta(minutes=5)
+logger = logging.getLogger(__name__)
 
 
 class InputChangedError(ValueError):
@@ -101,6 +104,12 @@ class DurableAnalysisWorker:
             latency_ms = int((perf_counter() - started) * 1000)
             self._persist_success(claimed, extracted_documents, interview_map, latency_ms)
         except Exception as error:
+            logger.error(
+                "analysis job failed analysis_run_id=%s error_type=%s detail=%s",
+                claimed.analysis_run_id,
+                type(error).__name__,
+                str(error),
+            )
             self._record_failure(claimed, error)
         return True
 
@@ -309,4 +318,6 @@ def _classify_error(error: Exception) -> tuple[str, str, bool]:
         return error.code, "The source PDF could not be parsed.", False
     if isinstance(error, (InterviewMapValidationError, EvidenceValidationError)):
         return "EVIDENCE_VALIDATION_FAILED", "The generated interview map failed validation.", False
+    if isinstance(error, DeepSeekInvalidResponseError):
+        return "LLM_INVALID_OUTPUT", "The model returned an invalid interview map.", False
     return "ANALYSIS_FAILED", "The analysis failed temporarily and can be retried.", True

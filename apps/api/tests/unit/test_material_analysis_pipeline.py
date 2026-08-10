@@ -7,6 +7,13 @@ from uuid import UUID
 import pytest
 
 from app.ai.fake_interview_map import FakeInterviewMapLLM
+from app.ai.deepseek_interview_map import (
+    _build_evidence_catalog,
+    _ground_evidence_to_source_pages,
+    _normalise_model_payload,
+    _parse_model_json,
+    _replace_catalog_evidence,
+)
 from app.parsers.pdf_text import EmptyExtractedTextError, PdfTextExtractionError, extract_pdf_pages
 from app.schemas.interview_map import DocumentType, SourceLocation
 from app.services.document_extraction import (
@@ -117,3 +124,103 @@ def test_evidence_validation_rejects_text_not_present_in_extracted_page() -> Non
 
     with pytest.raises(EvidenceValidationError, match="not present"):
         validate_evidence_against_documents(invalid_map, documents)
+
+
+def test_deepseek_payload_normalisation_removes_only_invalid_optional_offsets() -> None:
+    payload = {
+        "evidence": [
+            {"location": {"page_number": 1, "start_offset": 0, "end_offset": 0}},
+            {"location": {"page_number": 2, "start_offset": 3, "end_offset": 9}},
+        ]
+    }
+
+    normalised = _normalise_model_payload(payload)
+
+    assert normalised == {
+        "evidence": [
+            {"location": {"page_number": 1, "start_offset": None, "end_offset": None}},
+            {"location": {"page_number": 2, "start_offset": 3, "end_offset": 9}},
+        ]
+    }
+
+
+def test_deepseek_payload_normalisation_repairs_model_only_contract_fields() -> None:
+    payload = {
+        "evidence": [
+            {
+                "original_text": "a" * 301,
+                "location": {"page_number": 1, "start_offset": None, "end_offset": None},
+            }
+        ],
+        "risks": [
+            {
+                "category": "EVIDENCE_GAP",
+                "verification_status": "VERIFIED",
+                "objectives": [
+                    {"coverage_conditions": [{"type": "REFLECTION_PROBE"}]}
+                ],
+            }
+        ],
+    }
+
+    normalised = _normalise_model_payload(payload)
+
+    assert normalised == {
+        "evidence": [
+            {
+                "original_text": "a" * 300,
+                "location": {"page_number": 1, "start_offset": None, "end_offset": None},
+            }
+        ],
+        "risks": [
+            {
+                "category": "EVIDENCE_GAP",
+                "verification_status": "UNVERIFIED",
+                "objectives": [
+                    {"coverage_conditions": [{"type": "PROVIDES_RESULT"}]}
+                ],
+            }
+        ],
+    }
+
+
+def test_deepseek_evidence_grounding_replaces_a_close_paraphrase_with_pdf_text() -> None:
+    inputs, reader = analysis_inputs()
+    extraction_service = DocumentExtractionService()
+    documents = [extraction_service.extract(item, reader) for item in inputs]
+    payload = {
+        "evidence": [
+            {
+                "document_id": str(CV_ID),
+                "location": {"page_number": 1},
+                "original_text": "Developed an attention-based model that improved robustness under noisy inputs.",
+            }
+        ]
+    }
+
+    grounded = _ground_evidence_to_source_pages(payload, documents)
+    evidence = grounded["evidence"][0]
+
+    assert evidence["original_text"] == fixture_line(
+        "attention_robustness_cv.txt", "Developed an attention-based"
+    )
+    assert evidence["location"]["start_offset"] == 0
+
+
+def test_deepseek_catalog_selection_replaces_model_copied_evidence_fields() -> None:
+    inputs, reader = analysis_inputs()
+    extraction_service = DocumentExtractionService()
+    documents = [extraction_service.extract(item, reader) for item in inputs]
+    catalog = _build_evidence_catalog(documents)
+    selected = catalog[0]
+    payload = {"evidence": [{"evidence_id": selected["evidence_id"], "original_text": "paraphrase"}]}
+
+    resolved = _replace_catalog_evidence(payload, catalog)
+
+    assert resolved == {"evidence": [selected]}
+
+
+def test_deepseek_json_parser_accepts_a_fenced_object() -> None:
+    assert _parse_model_json("```json\n{\"schema_version\": \"interview-map-v1\"}\n```") == {
+        "schema_version": "interview-map-v1"
+    }
