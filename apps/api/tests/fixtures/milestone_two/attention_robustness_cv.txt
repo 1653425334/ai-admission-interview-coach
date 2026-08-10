@@ -1,0 +1,8 @@
+ANONYMOUS CANDIDATE — CV
+
+Projects
+Robust Clinical Text Classification | 2025
+Developed an attention-based model to improve robustness under noisy inputs.
+
+Skills
+Python, PyTorch, NLP

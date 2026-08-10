@@ -80,10 +80,12 @@ def migrated_engine(migrated_database_url: str) -> Iterator[Engine]:
         engine.dispose()
 
 
-def test_head_migration_creates_milestone_one_schema(migrated_engine: Engine) -> None:
+def test_head_migration_creates_milestone_one_and_two_schema(migrated_engine: Engine) -> None:
     inspector = inspect(migrated_engine)
 
-    assert {"profiles", "applications", "documents"} <= set(inspector.get_table_names())
+    assert {"profiles", "applications", "documents", "analysis_runs", "jobs", "llm_runs"} <= set(
+        inspector.get_table_names()
+    )
 
     profile_columns = {column["name"]: column for column in inspector.get_columns("profiles")}
     assert profile_columns["id"]["type"].__class__.__name__ == "UUID"
@@ -120,6 +122,9 @@ def test_head_migration_creates_milestone_one_schema(migrated_engine: Engine) ->
         "parse_status",
         "extracted_text",
         "parse_error",
+        "parsed_at",
+        "parser_version",
+        "page_count",
         "created_at",
     } <= document_columns.keys()
     assert any(
@@ -141,6 +146,48 @@ def test_head_migration_creates_milestone_one_schema(migrated_engine: Engine) ->
 
     unique_constraints = inspector.get_unique_constraints("documents")
     assert any(constraint["column_names"] == ["application_id", "document_type"] for constraint in unique_constraints)
+
+    analysis_columns = {column["name"] for column in inspector.get_columns("analysis_runs")}
+    assert {
+        "id",
+        "application_id",
+        "status",
+        "stage",
+        "input_manifest_json",
+        "interview_map_json",
+        "provider",
+        "model",
+        "prompt_version",
+        "schema_version",
+        "idempotency_key",
+        "error_code",
+        "error_message",
+    } <= analysis_columns
+    analysis_indexes = {index["name"] for index in inspector.get_indexes("analysis_runs")}
+    assert {"ix_analysis_runs_application_created", "uq_analysis_runs_active_application"} <= analysis_indexes
+
+    job_columns = {column["name"] for column in inspector.get_columns("jobs")}
+    assert {"job_type", "entity_id", "status", "attempts", "available_at", "locked_at"} <= job_columns
+    assert any(
+        foreign_key["constrained_columns"] == ["entity_id"]
+        and foreign_key["referred_table"] == "analysis_runs"
+        and foreign_key["options"].get("ondelete") == "CASCADE"
+        for foreign_key in inspector.get_foreign_keys("jobs")
+    )
+
+    llm_columns = {column["name"] for column in inspector.get_columns("llm_runs")}
+    assert {
+        "operation",
+        "entity_id",
+        "provider",
+        "model",
+        "prompt_version",
+        "schema_version",
+        "input_tokens",
+        "output_tokens",
+        "latency_ms",
+        "estimated_cost_usd",
+    } <= llm_columns
 
     with migrated_engine.connect() as connection:
         index_definition = connection.execute(

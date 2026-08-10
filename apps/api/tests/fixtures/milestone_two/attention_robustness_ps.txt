@@ -1,0 +1,5 @@
+ANONYMOUS CANDIDATE — PERSONAL STATEMENT
+
+I want to study reliable machine learning systems and apply them to healthcare.
+My project experience made me interested in robustness, but the materials do not
+state the evaluation dataset, baseline, or numerical comparison.

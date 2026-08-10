@@ -16,6 +16,7 @@ from app.core.errors import ApiError
 from app.db.models.application import Application
 from app.db.models.document import Document
 from app.schemas.document import DocumentType
+from app.services.analysis_runs import delete_analysis_runs_for_application
 from app.services.applications import get_owned_application
 from app.services.pdf_validation import ValidatedPdf
 from app.storage.base import ObjectStorage
@@ -145,6 +146,10 @@ def delete_owned_document(
         ) from None
 
     db.delete(document)
+    # Analysis maps contain source excerpts. Do not retain them once either
+    # source document is deleted, even though analysis_runs references only the
+    # application and would otherwise survive this document deletion.
+    delete_analysis_runs_for_application(db, document.application_id)
     try:
         db.commit()
     except SQLAlchemyError:

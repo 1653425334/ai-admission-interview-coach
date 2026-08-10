@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
+import json
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5, NAMESPACE_URL
 
@@ -17,10 +18,19 @@ from app.core.config import get_settings
 from app.db.alembic_config import configparser_safe_url
 from app.db.migrations import validated_test_database_url
 from app.db.models.application import Application
+from app.db.models.analysis_run import AnalysisRun
 from app.db.models.document import Document
+from app.db.models.job import Job
 from app.db.models.profile import Profile
 from app.db.session import get_db
 from app.main import create_app
+
+
+M2_FIXTURE_DIRECTORY = Path(__file__).resolve().parents[1] / "fixtures" / "milestone_two"
+M2_CV_ID = UUID("22222222-2222-4222-8222-222222222222")
+M2_PS_ID = UUID("33333333-3333-4333-8333-333333333333")
+M2_CV_SHA256 = "a" * 64
+M2_PS_SHA256 = "b" * 64
 
 
 @pytest.fixture
@@ -165,3 +175,161 @@ def test_other_user_and_missing_application_are_indistinguishable(client_for_use
         response = client_for_user("b").get(f"/api/v1/applications/{application}")
         assert response.status_code == 404
         assert response.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+
+def _seed_analysis_ready_application(
+    integration_engine: Engine, *, user_name: str = "a"
+) -> UUID:
+    user_id = uuid5(NAMESPACE_URL, f"test-user:{user_name}")
+    application_id = uuid4()
+    with Session(integration_engine) as session:
+        session.add(Profile(id=user_id))
+        session.add(
+            Application(
+                id=application_id,
+                user_id=user_id,
+                target_school="Example University",
+                target_program="MSc AI",
+                status="ACTIVE",
+            )
+        )
+        session.add_all(
+            [
+                Document(
+                    id=M2_CV_ID,
+                    application_id=application_id,
+                    document_type="CV",
+                    original_filename="cv.pdf",
+                    storage_key="private/cv.pdf",
+                    mime_type="application/pdf",
+                    size_bytes=100,
+                    sha256=M2_CV_SHA256,
+                    parse_status="UPLOADED",
+                ),
+                Document(
+                    id=M2_PS_ID,
+                    application_id=application_id,
+                    document_type="PS",
+                    original_filename="ps.pdf",
+                    storage_key="private/ps.pdf",
+                    mime_type="application/pdf",
+                    size_bytes=100,
+                    sha256=M2_PS_SHA256,
+                    parse_status="UPLOADED",
+                ),
+            ]
+        )
+        session.commit()
+    return application_id
+
+
+def test_owned_user_can_create_analysis_without_leaking_input_metadata(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine)
+
+    client = client_for_user("a")
+    response = client.post(f"/api/v1/applications/{application_id}/analyses")
+
+    assert response.status_code == 202
+    payload = response.json()
+    assert payload["application_id"] == str(application_id)
+    assert payload["status"] == "PENDING"
+    assert payload["stage"] == "QUEUED"
+    assert payload["interview_map"] is None
+    assert {"input_manifest", "storage_key", "sha256", "extracted_text"}.isdisjoint(payload)
+
+    observed = client.get(f"/api/v1/analysis-runs/{payload['id']}")
+    assert observed.status_code == 200
+    assert observed.json()["id"] == payload["id"]
+    assert observed.json()["interview_map"] is None
+
+
+def test_analysis_requires_both_current_documents(
+    client_for_user: Callable[[str], TestClient]
+) -> None:
+    application = client_for_user("a").post(
+        "/api/v1/applications", json={"target_school": "CUHK", "target_program": "MSc AI"}
+    ).json()
+
+    response = client_for_user("a").post(f"/api/v1/applications/{application['id']}/analyses")
+
+    assert response.status_code == 422
+    assert response.json()["error"] == {
+        "code": "ANALYSIS_DOCUMENTS_REQUIRED",
+        "message": "Upload one CV and one personal statement before starting analysis.",
+        "request_id": response.headers["x-request-id"],
+    }
+
+
+def test_duplicate_analysis_requests_reuse_one_run_and_job(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine)
+    client = client_for_user("a")
+
+    first = client.post(
+        f"/api/v1/applications/{application_id}/analyses", headers={"Idempotency-Key": "analysis-1"}
+    )
+    second = client.post(
+        f"/api/v1/applications/{application_id}/analyses", headers={"Idempotency-Key": "analysis-1"}
+    )
+
+    assert first.status_code == second.status_code == 202
+    assert first.json()["id"] == second.json()["id"]
+    with Session(integration_engine) as session:
+        assert session.query(AnalysisRun).count() == 1
+        assert session.query(Job).count() == 1
+
+
+def test_other_user_cannot_read_analysis_run_or_latest_analysis(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine, user_name="a")
+    created = client_for_user("a").post(f"/api/v1/applications/{application_id}/analyses")
+    analysis_run_id = created.json()["id"]
+
+    hidden_run = client_for_user("b").get(f"/api/v1/analysis-runs/{analysis_run_id}")
+    hidden_latest = client_for_user("b").get(
+        f"/api/v1/applications/{application_id}/latest-analysis"
+    )
+
+    assert hidden_run.status_code == 404
+    assert hidden_run.json()["error"]["code"] == "ANALYSIS_RUN_NOT_FOUND"
+    assert hidden_latest.status_code == 404
+    assert hidden_latest.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
+
+
+def test_latest_analysis_returns_only_current_completed_interview_map(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine)
+    client = client_for_user("a")
+    created = client.post(f"/api/v1/applications/{application_id}/analyses")
+    analysis_run_id = UUID(created.json()["id"])
+    interview_map = json.loads(
+        (M2_FIXTURE_DIRECTORY / "attention_robustness_interview_map.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    interview_map["analysis_run_id"] = str(analysis_run_id)
+    with Session(integration_engine) as session:
+        analysis_run = session.get(AnalysisRun, analysis_run_id)
+        assert analysis_run is not None
+        analysis_run.status = "COMPLETED"
+        analysis_run.stage = "COMPLETED"
+        analysis_run.interview_map_json = interview_map
+        session.commit()
+
+    response = client.get(f"/api/v1/applications/{application_id}/latest-analysis")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(analysis_run_id)
+    assert payload["interview_map"]["schema_version"] == "interview-map-v1"
+    assert payload["interview_map"]["risks"][0]["verification_status"] == "UNVERIFIED"
+    serialized = json.dumps(payload)
+    assert "private/cv.pdf" not in serialized
+    assert "private/ps.pdf" not in serialized
+    assert "input_manifest_json" not in serialized
+    assert "extracted_text" not in serialized

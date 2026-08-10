@@ -42,3 +42,6 @@ class Application(Base):
     documents: Mapped[list["Document"]] = relationship(
         back_populates="application", cascade="all, delete-orphan"
     )
+    analysis_runs: Mapped[list["AnalysisRun"]] = relationship(
+        back_populates="application", cascade="all, delete-orphan"
+    )

@@ -1,0 +1,92 @@
+{
+  "schema_version": "interview-map-v1",
+  "analysis_run_id": "11111111-1111-4111-8111-111111111111",
+  "input_manifest": [
+    {
+      "document_id": "22222222-2222-4222-8222-222222222222",
+      "document_type": "CV",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "page_count": 1
+    },
+    {
+      "document_id": "33333333-3333-4333-8333-333333333333",
+      "document_type": "PS",
+      "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "page_count": 1
+    }
+  ],
+  "candidate_profile": {
+    "overview": "The candidate is interested in reliable machine learning for healthcare.",
+    "research_interests": ["reliable machine learning", "healthcare AI"],
+    "high_value_claim_ids": ["claim-001"],
+    "missing_or_uncertain_information": ["The evaluation baseline and numerical result are not stated."]
+  },
+  "evidence": [
+    {
+      "evidence_id": "ev-001",
+      "source_type": "APPLICATION_DOCUMENT",
+      "document_id": "22222222-2222-4222-8222-222222222222",
+      "document_type": "CV",
+      "location": {
+        "page_number": 1,
+        "section": "Projects",
+        "start_offset": 72,
+        "end_offset": 141
+      },
+      "original_text": "Developed an attention-based model to improve robustness under noisy inputs."
+    }
+  ],
+  "claims": [
+    {
+      "claim_id": "claim-001",
+      "category": "PERFORMANCE_IMPROVEMENT",
+      "statement": "The proposed attention-based method improved robustness.",
+      "assertion_strength": "EXPLICIT",
+      "evidence_ids": ["ev-001"],
+      "interview_value": "HIGH"
+    }
+  ],
+  "risks": [
+    {
+      "risk_id": "risk-001",
+      "category": "EVIDENCE_GAP",
+      "title": "Robustness improvement lacks evaluation evidence",
+      "severity": 4,
+      "evidence_ids": ["ev-001"],
+      "claim_id": "claim-001",
+      "reason": "The material claims improved robustness but does not provide a test, baseline, or result.",
+      "objectives": [
+        {
+          "objective_id": "obj-001",
+          "risk_id": "risk-001",
+          "target_claim_id": "claim-001",
+          "verification_goal": "Verify whether the candidate can explain the robustness definition, evaluation method, baseline, and concrete result.",
+          "coverage_conditions": [
+            {
+              "condition_id": "cond-001",
+              "type": "NAMES_TEST",
+              "description": "Names the robustness or perturbation test used.",
+              "required": true
+            },
+            {
+              "condition_id": "cond-002",
+              "type": "EXPLAINS_BASELINE",
+              "description": "Explains the baseline used for comparison.",
+              "required": true
+            },
+            {
+              "condition_id": "cond-003",
+              "type": "PROVIDES_RESULT",
+              "description": "Provides a concrete comparison or result.",
+              "required": true
+            }
+          ]
+        }
+      ],
+      "suggested_question_types": ["EVIDENCE_PROBE", "TECHNICAL_DEPTH_PROBE"],
+      "max_followups": 2,
+      "verification_status": "UNVERIFIED"
+    }
+  ],
+  "priority_risk_ids": ["risk-001"]
+}

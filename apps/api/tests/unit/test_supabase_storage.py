@@ -80,7 +80,7 @@ def test_put_uploads_private_object_without_upsert() -> None:
         r"user\app\cv.pdf",
     ],
 )
-@pytest.mark.parametrize("operation", ["put", "delete"])
+@pytest.mark.parametrize("operation", ["get", "put", "delete"])
 def test_rejects_non_canonical_object_key_before_network(operation: str, key: str) -> None:
     requests: list[httpx.Request] = []
 
@@ -91,7 +91,9 @@ def test_rejects_non_canonical_object_key_before_network(operation: str, key: st
     storage = SupabaseObjectStorage(_settings(), transport=httpx.MockTransport(handler))
 
     with pytest.raises(ValueError, match="canonical relative path"):
-        if operation == "put":
+        if operation == "get":
+            storage.get(key)
+        elif operation == "put":
             storage.put(key, b"pdf", "application/pdf")
         else:
             storage.delete(key)
@@ -118,6 +120,24 @@ def test_delete_calls_private_object_delete_endpoint() -> None:
     assert request.content == b'{"prefixes":["user/app/cv.pdf"]}'
 
 
+def test_get_reads_private_object_bytes() -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, content=b"private pdf bytes")
+
+    storage = SupabaseObjectStorage(_settings(), transport=httpx.MockTransport(handler))
+
+    assert storage.get("user/app/cv file.pdf") == b"private pdf bytes"
+    request = requests[0]
+    assert request.method == "GET"
+    assert request.url == (
+        "https://project.supabase.co/storage/v1/object/"
+        "private-documents/user/app/cv%20file.pdf"
+    )
+
+
 def test_delete_treats_missing_object_as_already_deleted() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="not found")
@@ -127,7 +147,7 @@ def test_delete_treats_missing_object_as_already_deleted() -> None:
     storage.delete("already-gone.pdf")
 
 
-@pytest.mark.parametrize("operation", ["put", "delete"])
+@pytest.mark.parametrize("operation", ["get", "put", "delete"])
 def test_provider_error_is_mapped_without_disclosing_response_or_key(operation: str) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(500, text="provider secret response")
@@ -135,7 +155,9 @@ def test_provider_error_is_mapped_without_disclosing_response_or_key(operation: 
     storage = SupabaseObjectStorage(_settings(), transport=httpx.MockTransport(handler))
 
     with pytest.raises(ApiError) as error:
-        if operation == "put":
+        if operation == "get":
+            storage.get("private.pdf")
+        elif operation == "put":
             storage.put("private.pdf", b"pdf", "application/pdf")
         else:
             storage.delete("private.pdf")

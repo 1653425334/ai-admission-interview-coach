@@ -13,3 +13,24 @@ htmlcov/
 .env*
 !.env.example
 
+# Local runtime and tool caches
+.pnpm-store/
+.run/
+.uv-cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local databases and private uploaded materials
+*.sqlite
+*.sqlite3
+*.db
+local-uploads/
+var/uploads/
+data/uploads/
+
+# IDE and operating system temporary files
+.idea/
+*.swp
+*.tmp
+Thumbs.db
+

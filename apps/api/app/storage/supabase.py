@@ -50,6 +50,19 @@ class SupabaseObjectStorage:
         except httpx.HTTPError:
             raise _storage_unavailable() from None
 
+    def get(self, key: str) -> bytes:
+        _validate_object_key(key)
+        bucket = quote(self._bucket, safe="")
+        object_key = quote(key, safe="/")
+        url = f"{self._base_url}/storage/v1/object/{bucket}/{object_key}"
+        try:
+            with self._client() as client:
+                response = client.get(url)
+                response.raise_for_status()
+                return response.content
+        except httpx.HTTPError:
+            raise _storage_unavailable() from None
+
     def delete(self, key: str) -> None:
         _validate_object_key(key)
         bucket = quote(self._bucket, safe="")

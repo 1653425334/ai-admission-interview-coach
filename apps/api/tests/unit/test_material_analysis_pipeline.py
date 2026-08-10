@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+from hashlib import sha256
+from pathlib import Path
+from uuid import UUID
+
+import pytest
+
+from app.ai.fake_interview_map import FakeInterviewMapLLM
+from app.parsers.pdf_text import EmptyExtractedTextError, PdfTextExtractionError, extract_pdf_pages
+from app.schemas.interview_map import DocumentType, SourceLocation
+from app.services.document_extraction import (
+    AnalysisDocumentInput,
+    DocumentExtractionService,
+    DocumentReadError,
+    InMemoryDocumentReader,
+)
+from app.services.evidence_validation import EvidenceValidationError, validate_evidence_against_documents
+from app.services.material_analysis import MaterialAnalysisPipeline
+from tests.pdf_factory import build_pdf
+
+
+FIXTURE_DIRECTORY = Path(__file__).resolve().parents[1] / "fixtures" / "milestone_two"
+RUN_ID = UUID("11111111-1111-4111-8111-111111111111")
+CV_ID = UUID("22222222-2222-4222-8222-222222222222")
+PS_ID = UUID("33333333-3333-4333-8333-333333333333")
+
+
+def fixture_line(filename: str, prefix: str) -> str:
+    for line in (FIXTURE_DIRECTORY / filename).read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            return line
+    raise AssertionError(f"Fixture {filename} has no line beginning with {prefix!r}")
+
+
+def analysis_inputs() -> tuple[list[AnalysisDocumentInput], InMemoryDocumentReader]:
+    cv_text = fixture_line("attention_robustness_cv.txt", "Developed an attention-based")
+    ps_text = fixture_line("attention_robustness_ps.txt", "I want to study reliable")
+    cv_bytes = build_pdf(text=cv_text)
+    ps_bytes = build_pdf(text=ps_text)
+    inputs = [
+        AnalysisDocumentInput(
+            document_id=CV_ID,
+            document_type=DocumentType.CV,
+            sha256=sha256(cv_bytes).hexdigest(),
+        ),
+        AnalysisDocumentInput(
+            document_id=PS_ID,
+            document_type=DocumentType.PS,
+            sha256=sha256(ps_bytes).hexdigest(),
+        ),
+    ]
+    return inputs, InMemoryDocumentReader({CV_ID: cv_bytes, PS_ID: ps_bytes})
+
+
+def test_extract_pdf_pages_preserves_page_boundaries_and_canonical_text() -> None:
+    pages = extract_pdf_pages(build_pdf(pages=2, text="Evidence line"))
+
+    assert [page.page_number for page in pages] == [1, 2]
+    assert [page.normalized_text for page in pages] == ["Evidence line", "Evidence line"]
+    assert all(page.raw_text == "Evidence line" for page in pages)
+
+
+def test_extract_pdf_pages_rejects_empty_pdf() -> None:
+    with pytest.raises(EmptyExtractedTextError) as error:
+        extract_pdf_pages(build_pdf(text=None))
+
+    assert error.value.code == "EMPTY_EXTRACTED_TEXT"
+
+
+def test_extract_pdf_pages_rejects_damaged_pdf() -> None:
+    with pytest.raises(PdfTextExtractionError) as error:
+        extract_pdf_pages(b"%PDF-not-a-readable-document")
+
+    assert error.value.code == "PDF_PARSE_FAILED"
+
+
+def test_document_extraction_surfaces_reader_failure() -> None:
+    class FailingReader:
+        def read(self, _document: AnalysisDocumentInput) -> bytes:
+            raise RuntimeError("storage is unavailable")
+
+    inputs, _reader = analysis_inputs()
+    with pytest.raises(DocumentReadError) as error:
+        DocumentExtractionService().extract(inputs[0], FailingReader())
+
+    assert error.value.code == "DOCUMENT_READ_FAILED"
+
+
+def test_fake_pipeline_is_deterministic_and_returns_a_validated_interview_map() -> None:
+    inputs, reader = analysis_inputs()
+    pipeline = MaterialAnalysisPipeline(
+        extraction_service=DocumentExtractionService(),
+        llm=FakeInterviewMapLLM(),
+    )
+
+    first = pipeline.analyze(inputs, reader, RUN_ID)
+    second = pipeline.analyze(inputs, reader, RUN_ID)
+
+    assert first.model_dump(mode="json") == second.model_dump(mode="json")
+    assert first.risks[0].evidence_ids == ["ev-001"]
+    assert first.risks[0].verification_status == "UNVERIFIED"
+
+
+def test_evidence_validation_rejects_text_not_present_in_extracted_page() -> None:
+    inputs, reader = analysis_inputs()
+    extraction_service = DocumentExtractionService()
+    documents = [extraction_service.extract(item, reader) for item in inputs]
+    interview_map = FakeInterviewMapLLM().generate(documents, RUN_ID)
+    invalid_evidence = interview_map.evidence[0].model_copy(
+        update={
+            "original_text": "Invented evidence that is not in the PDF.",
+            "location": SourceLocation(page_number=1),
+        }
+    )
+    invalid_map = interview_map.model_copy(update={"evidence": [invalid_evidence]})
+
+    with pytest.raises(EvidenceValidationError, match="not present"):
+        validate_evidence_against_documents(invalid_map, documents)
