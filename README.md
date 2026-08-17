@@ -1,104 +1,191 @@
-# AI Admission Interview Coach — Milestone 1
+# AI Admission Interview Coach
 
-Milestone 1 provides the foundation for an admission-interview coach: Supabase email/password sign-in, owned application targets, and secure CV/personal-statement uploads.
+一个面向 AI / Computer Science 研究生申请者的证据驱动模拟面试系统。它不会只根据 CV 和 Personal Statement 生成一组通用问题，而是把申请材料转换为可执行的 `InterviewMap`，再通过多轮回答评价、风险状态更新和动态选题完成自适应模拟面试。
 
-It deliberately **only validates and stores text-based PDFs**. It does **not** parse or analyze the documents, call an LLM, create public URLs, or expose uploaded text. A successful document stays in the `UPLOADED` state.
+> 当前状态：M1–M3 核心闭环已完成。支持 Supabase Auth、私有材料上传、DeepSeek / Fake 双模式材料分析、自适应模拟面试、持久化会话和最终报告。
 
-## Prerequisites (Windows, no Docker)
+## 为什么做这个项目
 
-- Windows PowerShell 7 or Windows PowerShell.
-- [PostgreSQL 17](https://www.postgresql.org/download/windows/) including `psql`; add its `bin` directory to `PATH` if the installer did not do so.
-- Python 3.12 and [uv](https://docs.astral.sh/uv/).
-- Node.js 22 LTS or newer with Corepack enabled (`corepack enable`), then pnpm 11 (`corepack prepare pnpm@11.9.0 --activate`).
-- A Supabase project for browser authentication and private object storage.
+普通 LLM 很容易总结申请材料或生成“常见面试题”，但这类输出通常缺少三个关键能力：
 
-From the repository root, install the project dependencies:
+- 无法说明问题来自材料中的哪条原文证据；
+- 无法定义一个回答究竟需要覆盖哪些可观察信息；
+- 无法根据候选人的实时回答更新风险并决定下一题。
+
+本项目围绕下面的训练闭环设计：
+
+```text
+Evidence → Claim → Risk → Objective → Coverage Condition
+         → Question → Answer → Evaluation → Risk State → Next Question
+```
+
+例如，材料中出现“提出 attention-based method 并提升 robustness”时，系统不会只问“请介绍这个项目”，而会建立可追溯的验证目标，检查回答是否说明测试方式、baseline、具体结果、技术机制和个人贡献，并根据尚未覆盖的条件生成下一次追问。
+
+## 核心能力
+
+### 1. 安全的申请材料工作区
+
+- Supabase email/password authentication；
+- 服务端 JWT 校验，兼容当前 Supabase ES256 token；
+- Application、Document、Analysis 和 Interview 全链路用户隔离；
+- CV / Personal Statement 存储在 private Supabase Storage bucket；
+- API 不返回 storage key、公开 URL 或提取后的全文；
+- 仅接受 text-based PDF，限制 10 MB、30 页，并拒绝扫描件、加密文件和畸形 PDF。
+
+### 2. 证据驱动的材料分析
+
+- 独立 Worker 从私有 Storage 下载并逐页解析材料；
+- 构建版本化的 `interview-map-v1`；
+- 形成 `Evidence → CandidateClaim → InterviewRisk → VerificationObjective → CoverageCondition` 引用链；
+- 对 document ownership、页码、原文摘录、对象引用和 Schema 做确定性校验；
+- 支持目标学校、项目、项目介绍和 program URL 上下文；
+- PostgreSQL 持久化分析快照、Worker job、LLM run 和成本元数据；
+- 支持 idempotency、失败恢复和页面刷新后的状态恢复。
+
+### 3. 自适应模拟面试
+
+- Interview Session 永久绑定一次已完成的 Analysis Run 和 Schema Version；
+- 根据 InterviewMap 的优先风险和未满足 Coverage Conditions 选择问题；
+- 对每个 condition 输出 `MET | NOT_MET | UNCLEAR`；
+- 由确定性应用代码计算 `UNVERIFIED | PARTIALLY_VERIFIED | VERIFIED | CONFIRMED_RISK`；
+- 最多进行两次受控追问，并在 follow-up budget 用尽后切换目标；
+- 支持 5–8 题的 session question budget；
+- 持久化每一道问题、回答和不可变 Evaluation event；
+- 最终生成优势、未解决风险、准备建议和 English communication feedback。
+
+### 4. Fake / DeepSeek 双模式
+
+- `LLM_MODE=fake`：确定性、离线、无调用成本，适合开发、测试和稳定演示；
+- `LLM_MODE=deepseek`：使用真实模型生成 InterviewMap、下一题和 condition-level evaluation；
+- LLM 只负责受约束的 structured generation，不直接控制最终风险状态和流程跳转；
+- provider adapter 隔离模型实现，核心领域状态不依赖某个模型供应商。
+
+## 系统架构
+
+```mermaid
+flowchart LR
+    U["User / Browser"] --> W["Next.js Web"]
+    W --> A["Supabase Auth"]
+    W -->|"Bearer JWT"| F["FastAPI API"]
+    F -->|"Domain state"| P[("PostgreSQL")]
+    F -->|"Private upload/delete"| S["Supabase Storage"]
+    K["Analysis Worker"] -->|"Claim durable job"| P
+    K -->|"Read private PDF"| S
+    K --> L["Fake Provider / DeepSeek API"]
+    K -->|"Validated InterviewMap"| P
+    F -->|"Question + Evaluation"| L
+    F -->|"Deterministic state transition"| P
+```
+
+这是一个模块化单体，而不是为了展示复杂度而拆成多个微服务：
+
+- Web：Next.js 16、React 19、TypeScript；
+- API：FastAPI、Pydantic、SQLAlchemy；
+- Database：PostgreSQL 17、Alembic；
+- Auth / Storage：Supabase；
+- LLM：DeepSeek structured output + deterministic Fake provider；
+- Worker：PostgreSQL-backed durable job worker；
+- Testing：Pytest、Vitest、Testing Library、ESLint、TypeScript。
+
+## 关键设计取舍
+
+### LLM 不拥有状态机
+
+模型可以判断回答是否满足某个 Coverage Condition，但不能直接把风险标记为 `VERIFIED`。风险状态由 Evaluation event 通过确定性函数重放得到，从而保证可测试、可解释和可恢复。
+
+### 原文证据必须可定位
+
+每条 Evidence 都绑定 document、page number 和 original text。生成结果只有同时通过 Pydantic Schema、引用完整性和原文定位校验后才能写入数据库。
+
+### PostgreSQL 是唯一领域事实源
+
+Application、Document、Analysis Run、Job、LLM Run、Interview Session、Turn 和 Evaluation 均持久化到 PostgreSQL。浏览器刷新或 Worker 重启不会丢失核心流程状态。
+
+### 隐私边界由后端统一执行
+
+前端只直接使用 Supabase Auth。所有领域数据和私有对象访问均通过 FastAPI，在服务端完成 JWT 验证和 ownership 检查；跨用户访问统一表现为 `404`，避免泄漏资源是否存在。
+
+## 数据库演进
+
+| Migration | 内容 |
+| --- | --- |
+| `0001` | Profile、Application、私有 CV / PS metadata |
+| `0002` | Analysis Run、durable Job、LLM Run、解析元数据 |
+| `0003` | Target Program Context |
+| `0004` | Adaptive Interview Session、Turn、Evaluation |
+
+当前 schema head 为 `0004`。
+
+## 项目结构
+
+```text
+apps/
+├── api/
+│   ├── alembic/versions/     # 0001–0004 database migrations
+│   ├── app/ai/               # Fake / DeepSeek provider adapters
+│   ├── app/api/routes/       # Authenticated REST API
+│   ├── app/schemas/          # InterviewMap and interview contracts
+│   ├── app/services/         # Domain logic and state transitions
+│   ├── app/workers/          # Durable material-analysis worker
+│   └── tests/                # Unit, API and PostgreSQL integration tests
+└── web/
+    └── src/                  # Next.js pages, components and tests
+docs/specs/                   # Product and domain specifications
+infra/                        # Local PostgreSQL helpers
+```
+
+## 本地运行
+
+### 环境要求
+
+- Windows PowerShell；
+- PostgreSQL 17；
+- Python 3.12 和 [uv](https://docs.astral.sh/uv/)；
+- Node.js 22 LTS、Corepack 和 pnpm 11；
+- 一个启用 email/password Auth 和 private Storage bucket 的 Supabase project。
+
+安装依赖：
 
 ```powershell
 uv sync --project apps/api --all-groups
 pnpm install
 ```
 
-### PostgreSQL 17
+### 环境变量
 
-The default Windows service installed by PostgreSQL 17 is commonly named `postgresql-x64-17`. Confirm the exact name on this machine, then start or stop it from an elevated PowerShell:
-
-```powershell
-Get-Service *postgres*
-Start-Service postgresql-x64-17
-Stop-Service postgresql-x64-17
-```
-
-Create an application role with no server-administration privileges and two dedicated databases. Replace only the angle-bracket placeholders; do not put an actual password in source control. Run the following in `psql` as the local PostgreSQL administrator:
-
-```powershell
-psql -U postgres -d postgres
-```
-
-```sql
-CREATE ROLE admission_coach_app LOGIN PASSWORD '<choose-a-local-password>'
-  NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION;
-
-CREATE DATABASE admission_coach OWNER postgres;
-CREATE DATABASE admission_coach_test OWNER postgres;
-
-\connect admission_coach
-REVOKE ALL ON DATABASE admission_coach FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE admission_coach TO admission_coach_app;
-GRANT USAGE, CREATE ON SCHEMA public TO admission_coach_app;
-
-\connect admission_coach_test
-REVOKE ALL ON DATABASE admission_coach_test FROM PUBLIC;
-REVOKE CREATE ON SCHEMA public FROM PUBLIC;
-GRANT CONNECT, TEMPORARY ON DATABASE admission_coach_test TO admission_coach_app;
-GRANT USAGE, CREATE ON SCHEMA public TO admission_coach_app;
-```
-
-The role can connect and create the tables/indexes it owns in these two databases, but cannot create roles or databases and is not a superuser. The test database is intentionally separate because migration/integration tests upgrade and downgrade its schema.
-
-## Environment configuration
-
-Create the root API environment file and fill in the placeholders locally:
+复制示例文件：
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-`DATABASE_URL` points at `admission_coach`; `TEST_DATABASE_URL` must point at the isolated `admission_coach_test` database. `WEB_ORIGIN` is the single browser origin allowed by the API. The `SUPABASE_*` values are server-only FastAPI configuration, while the `NEXT_PUBLIC_*` values are browser-safe configuration.
+| Variable | 用途 |
+| --- | --- |
+| `DATABASE_URL` | API、Worker 和 Alembic 使用的 PostgreSQL URL |
+| `TEST_DATABASE_URL` | 独立的 PostgreSQL integration test database |
+| `WEB_ORIGIN` | FastAPI 允许的 Web origin |
+| `SUPABASE_URL` | 服务端 Supabase project URL |
+| `SUPABASE_JWT_AUDIENCE` | 通常为 `authenticated` |
+| `SUPABASE_STORAGE_BUCKET` | Private document bucket |
+| `SUPABASE_SERVICE_ROLE_KEY` | 仅供 API 使用，绝不能暴露到浏览器 |
+| `NEXT_PUBLIC_SUPABASE_URL` | Web 使用的 Supabase URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | 浏览器可用的 publishable / anon key |
+| `NEXT_PUBLIC_API_BASE_URL` | FastAPI base URL |
+| `LLM_MODE` | `fake` 或 `deepseek` |
+| `DEEPSEEK_API_KEY` | `deepseek` 模式必需，仅供服务端使用 |
+| `DEEPSEEK_MODEL` | DeepSeek model name |
+| `DEEPSEEK_BASE_URL` | 默认 `https://api.deepseek.com` |
 
-The following values are required. `.env.example` contains only placeholders and must remain secret-free.
+Next.js 从 `apps/web/.env.local` 读取三个 `NEXT_PUBLIC_*` 变量。不要把 service role key 或 DeepSeek key 写入该文件。
 
-| Variable | Used by | Purpose |
-| --- | --- | --- |
-| `DATABASE_URL` | API/Alembic | Development PostgreSQL URL |
-| `TEST_DATABASE_URL` | API integration tests | Dedicated `admission_coach_test` URL |
-| `WEB_ORIGIN` | API | Allowed web origin |
-| `SUPABASE_URL` | API | Supabase project URL for JWT validation/storage |
-| `SUPABASE_JWT_AUDIENCE` | API | Usually `authenticated` |
-| `SUPABASE_STORAGE_BUCKET` | API | Private bucket name, e.g. `application-documents` |
-| `SUPABASE_SERVICE_ROLE_KEY` | API only | Prefer the current `sb_secret_...` server key; the legacy `service_role` JWT also works. Never expose either value or prefix it `NEXT_PUBLIC_` |
-| `NEXT_PUBLIC_SUPABASE_URL` | Web | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Web | Browser publishable/anon key, never the service-role key |
-| `NEXT_PUBLIC_API_BASE_URL` | Web | FastAPI base URL, normally `http://localhost:8000` |
-| `LLM_MODE` | API/analysis worker | `fake` for tests and offline development; `deepseek` for real material analysis and adaptive interviews |
-| `DEEPSEEK_API_KEY` | API/analysis worker | Server-only DeepSeek key; required when `LLM_MODE=deepseek` |
-| `DEEPSEEK_MODEL` | API/analysis worker | DeepSeek model name used for structured generation |
-| `DEEPSEEK_BASE_URL` | API/analysis worker | Normally `https://api.deepseek.com` |
+### Supabase 配置
 
-Next.js reads its local environment file from its application directory. Create `apps/web/.env.local` with only the three `NEXT_PUBLIC_*` entries above (the same public values from root `.env`); do not copy the server secret into that file.
+1. 在 Authentication 中启用 Email provider；
+2. 创建名为 `SUPABASE_STORAGE_BUCKET` 配置值的 bucket；
+3. 保持 bucket 为 private；
+4. publishable key 只提供给 Web，`sb_secret_...` 或 legacy service-role key 只提供给 API。
 
-## Supabase setup
-
-1. In **Authentication → Providers**, enable Email and configure email/password sign-in for the local project. Create two test users (A and B), completing email confirmation if the project requires it.
-2. In **Storage**, create the bucket named by `SUPABASE_STORAGE_BUCKET` and keep it **private**. Do not make the bucket public.
-3. Copy the project URL to both Supabase URL variables. Put the publishable key only in `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. Put a current `sb_secret_...` key only in the root API `.env` as `SUPABASE_SERVICE_ROLE_KEY`; a legacy `service_role` JWT remains supported during migration.
-
-The server secret bypasses Storage access controls and is used only by FastAPI after it has verified the caller's JWT and ownership. It must never be committed, sent to the browser, logged, or used as a publishable key.
-
-## Migrate and run
-
-Apply the schema to the development database:
+### 数据库迁移
 
 ```powershell
 Push-Location apps/api
@@ -106,7 +193,9 @@ uv run alembic upgrade head
 Pop-Location
 ```
 
-Run FastAPI in one terminal:
+### 启动服务
+
+FastAPI：
 
 ```powershell
 Push-Location apps/api
@@ -114,9 +203,7 @@ uv run uvicorn app.main:app --reload
 Pop-Location
 ```
 
-`http://localhost:8000/api/v1/health` should return `{"status":"ok"}`.
-
-Run the durable material-analysis worker in a second API terminal:
+Material Analysis Worker：
 
 ```powershell
 Push-Location apps/api
@@ -124,62 +211,74 @@ uv run python -m app.workers.run_analysis_worker
 Pop-Location
 ```
 
-The worker uses the same root `.env` as FastAPI, so it requires a migrated
-`DATABASE_URL` and valid private Supabase Storage settings. With `LLM_MODE=fake`
-it uses the deterministic offline provider; with `LLM_MODE=deepseek` it uses the
-configured DeepSeek model for structured InterviewMap generation.
-Keep this process running while testing the analysis UI. For a one-job smoke
-test, use `uv run python -m app.workers.run_analysis_worker --once`.
+只处理一个 job 后退出：
 
-M3 text interviews run synchronously through FastAPI and do not require a
-separate interview worker. In `deepseek` mode, DeepSeek writes only the next
-question and condition-level answer evaluation; deterministic application code
-retains control of verification status, follow-up limits, and next-action flow.
+```powershell
+uv run --project apps/api python -m app.workers.run_analysis_worker --once
+```
 
-Run the web app in another terminal:
+Next.js：
 
 ```powershell
 pnpm --filter web dev
 ```
 
-Open `http://localhost:3000`, sign in, and create an application before uploading a CV or PS. Each upload must be a text-based PDF, no larger than 10 MB and no more than 30 pages. Scanned, encrypted, malformed, oversized, and over-length PDFs are rejected. The API also applies a 10 MB plus 64 KiB ingress cap to the whole multipart request before it is spooled; this transport cap permits multipart boundaries and form headers, while the route remains the exact 10 MB file-size authority.
+打开 `http://localhost:3000`。API health endpoint 为 `http://localhost:8000/api/v1/health`。
 
-## Verification
+> M3 text interview 由 FastAPI 同步驱动，不需要独立 interview worker。Material Analysis 需要 analysis worker 保持运行。
 
-Run API tests and coverage (this uses the dedicated test database and returns it to the base migration):
+## 演示路径
+
+推荐使用 `LLM_MODE=fake` 完成稳定的本地演示，再用 `deepseek` 模式展示真实模型效果：
+
+1. 注册并登录；
+2. 创建目标学校和项目；
+3. 填写可选的 Program Context；
+4. 上传一份 text-based CV 和 Personal Statement；
+5. 启动 Material Analysis，观察 Worker 状态和生成的 InterviewMap；
+6. 查看原文 Evidence、Candidate Claims、Risks、Objectives 和 Coverage Conditions；
+7. 启动 Mock Interview；
+8. 提交不同质量的回答，观察 condition evaluation、风险状态和下一题变化；
+9. 完成面试并查看 Final Report。
+
+## 验证
+
+当前本地测试基线：
+
+- API：`185 passed`；
+- Web：`62 passed`；
+- ESLint：通过；
+- TypeScript：通过。
+
+运行 API tests 和 coverage：
 
 ```powershell
+$env:UV_CACHE_DIR = (Resolve-Path .uv-cache).Path
 uv run --project apps/api pytest apps/api/tests -v --cov=app --cov-report=term-missing
 ```
 
-Run the focused PostgreSQL acceptance journey separately if needed:
+运行 Web tests：
 
 ```powershell
-uv run --project apps/api pytest apps/api/tests/api/test_milestone_one_journey.py -v
+Push-Location apps/web
+node .\node_modules\vitest\vitest.mjs --run --config .\vitest.config.ts
+Pop-Location
 ```
 
-Run web checks:
+运行 lint 和 TypeScript checks：
 
 ```powershell
-pnpm --filter web test -- --run
 pnpm --filter web lint
-pnpm --filter web exec tsc --noEmit
-$env:NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co"
-$env:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = "test-publishable-key"
-$env:NEXT_PUBLIC_API_BASE_URL = "http://localhost:8000"
+node .\apps\web\node_modules\typescript\bin\tsc --noEmit -p .\apps\web\tsconfig.json
+```
+
+生产构建：
+
+```powershell
 pnpm --filter web build
 ```
 
-If a `pnpm` shim cannot resolve correctly from a Chinese/non-ASCII repository path, invoke the checked-in workspace binaries directly instead:
-
-```powershell
-node .\apps\web\node_modules\vitest\vitest.mjs --run --config .\apps\web\vitest.config.ts
-node .\apps\web\node_modules\eslint\bin\eslint.js .\apps\web
-node .\apps\web\node_modules\typescript\bin\tsc --noEmit -p .\apps\web\tsconfig.json
-node .\apps\web\node_modules\next\dist\bin\next build .\apps\web
-```
-
-To exercise the migration round-trip manually, run `upgrade`, `downgrade`, then `upgrade` for development. Finish with development at `head`; finish the test database at `base`.
+检查 migration round-trip：
 
 ```powershell
 Push-Location apps/api
@@ -189,21 +288,19 @@ uv run alembic upgrade head
 Pop-Location
 ```
 
-Finally check whitespace and the worktree:
+Migration 和 integration tests 会操作 `TEST_DATABASE_URL` 指向的数据库，因此它必须与开发数据库完全分离。
 
-```powershell
-git diff --check
-git status --short
-```
+## 真实环境验收边界
 
-## Manual cloud/browser acceptance checklist
+自动化测试覆盖 authentication boundary、ownership、private storage adapter、migration、durable worker、InterviewMap validation、adaptive interview state 和 Web interactions。
 
-Run this only after supplying a real Supabase project URL and keys. It is intentionally not performed against placeholder or dummy credentials.
+以下结论仍应在真实 Supabase / DeepSeek 配置下手工确认：
 
-- [ ] Sign in as user A with email/password, create an application, upload one CV and one PS, then refresh; both metadata entries remain visible.
-- [ ] Confirm the API response and page never reveal a storage key, public URL, or extracted text.
-- [ ] In the Supabase dashboard, confirm the bucket remains private and contains the two original objects only.
-- [ ] Sign in as user B and open user A's application URL; it must show a not-found result and B must not be able to delete either document.
-- [ ] Sign back in as A, delete the CV, refresh, and confirm its upload slot is available and the private storage object is gone.
+- 用户 A 无法读取或删除用户 B 的 Application 和 Document；
+- private bucket 中不存在公开访问 URL；
+- API response 和页面不会暴露 storage key 或 extracted document text；
+- 替换或删除材料后，旧分析不会继续作为当前输入使用；
+- DeepSeek structured output 能通过完整 Schema 和 evidence validation；
+- 一场真实多轮面试能够恢复状态并生成最终报告。
 
-No live Supabase/browser A/B claim should be made until this checklist is completed with valid cloud credentials. The local acceptance test covers the corresponding ownership, persistence, metadata-redaction, and deletion behavior using real PostgreSQL plus a fake storage boundary.
+不要使用真实个人申请材料制作公开截图、演示视频或测试 fixture；公开演示应使用完全虚构并脱敏的材料。
