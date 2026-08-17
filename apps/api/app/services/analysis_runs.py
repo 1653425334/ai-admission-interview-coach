@@ -115,10 +115,19 @@ def build_input_manifest(db: Session, application_id: UUID) -> dict[str, Any]:
     by_type = {document.document_type: document for document in documents}
     if set(by_type) != {"CV", "PS"} or len(documents) != 2:
         raise AnalysisDocumentsRequiredError("A current CV and PS are required for analysis")
+    application = db.get(Application, application_id)
+    if application is None:
+        raise ValueError("Application no longer exists")
     return {
         "schema_version": ANALYSIS_INPUT_SCHEMA_VERSION,
         "parser_version": PARSER_VERSION,
         "interview_map_schema_version": INTERVIEW_MAP_SCHEMA_VERSION,
+        "application_context": {
+            "target_school": application.target_school,
+            "target_program": application.target_program,
+            "program_url": application.program_url,
+            "program_description": application.program_description,
+        },
         "documents": [
             {
                 "document_id": str(by_type[document_type].id),

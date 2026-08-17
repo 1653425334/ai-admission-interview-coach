@@ -177,6 +177,43 @@ def test_other_user_and_missing_application_are_indistinguishable(client_for_use
         assert response.json()["error"]["code"] == "APPLICATION_NOT_FOUND"
 
 
+def test_owner_can_save_program_context_without_exposing_it_to_other_users(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine)
+    client = client_for_user("a")
+
+    updated = client.patch(
+        f"/api/v1/applications/{application_id}/program-context",
+        json={
+            "program_url": "https://example.edu/msc-ai",
+            "program_description": "Official program focus on reliable AI systems.",
+        },
+    )
+
+    assert updated.status_code == 200
+    assert updated.json()["program_url"] == "https://example.edu/msc-ai"
+    assert updated.json()["program_description"] == "Official program focus on reliable AI systems."
+    assert client_for_user("b").patch(
+        f"/api/v1/applications/{application_id}/program-context", json={}
+    ).status_code == 404
+
+
+def test_program_context_patch_is_allowed_by_cors_preflight(
+    client_for_user: Callable[[str], TestClient]
+) -> None:
+    response = client_for_user("a").options(
+        "/api/v1/applications/00000000-0000-0000-0000-000000000000/program-context",
+        headers={
+            "Origin": "https://web.example",
+            "Access-Control-Request-Method": "PATCH",
+        },
+    )
+
+    assert response.status_code == 200
+    assert "PATCH" in response.headers["access-control-allow-methods"]
+
+
 def _seed_analysis_ready_application(
     integration_engine: Engine, *, user_name: str = "a"
 ) -> UUID:
@@ -280,6 +317,34 @@ def test_duplicate_analysis_requests_reuse_one_run_and_job(
     with Session(integration_engine) as session:
         assert session.query(AnalysisRun).count() == 1
         assert session.query(Job).count() == 1
+
+
+def test_program_context_change_invalidates_completed_analysis(
+    client_for_user: Callable[[str], TestClient], integration_engine: Engine
+) -> None:
+    application_id = _seed_analysis_ready_application(integration_engine)
+    client = client_for_user("a")
+    created = client.post(f"/api/v1/applications/{application_id}/analyses")
+    analysis_run_id = UUID(created.json()["id"])
+    interview_map = json.loads(
+        (M2_FIXTURE_DIRECTORY / "attention_robustness_interview_map.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    interview_map["analysis_run_id"] = str(analysis_run_id)
+    with Session(integration_engine) as session:
+        run = session.get(AnalysisRun, analysis_run_id)
+        assert run is not None
+        run.status = "COMPLETED"
+        run.stage = "COMPLETED"
+        run.interview_map_json = interview_map
+        session.commit()
+
+    assert client.patch(
+        f"/api/v1/applications/{application_id}/program-context",
+        json={"program_description": "Official program context changed."},
+    ).status_code == 200
+    assert client.get(f"/api/v1/applications/{application_id}/latest-analysis").status_code == 404
 
 
 def test_other_user_cannot_read_analysis_run_or_latest_analysis(

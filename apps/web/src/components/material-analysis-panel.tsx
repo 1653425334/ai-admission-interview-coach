@@ -117,6 +117,12 @@ function RiskCard({ risk, evidenceById }: { risk: InterviewRisk; evidenceById: M
         <h4 className="font-medium">Why verify this</h4>
         <p className="mt-1">{risk.reason}</p>
       </div>
+      {risk.relevance_to_target ? (
+        <div>
+          <h4 className="font-medium">Why this matters for this application</h4>
+          <p className="mt-1">{risk.relevance_to_target}</p>
+        </div>
+      ) : null}
       <div className="space-y-3">
         <h4 className="font-medium">Verification objectives</h4>
         {risk.objectives.map((objective) => (

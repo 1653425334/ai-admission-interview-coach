@@ -15,6 +15,8 @@ class ApplicationCreate(BaseModel):
     target_school: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     target_program: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     degree_type: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=100)] = None
+    program_url: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=500)] = None
+    program_description: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=6_000)] = None
 
     @field_validator("degree_type")
     @classmethod
@@ -24,6 +26,16 @@ class ApplicationCreate(BaseModel):
         return value
 
 
+class ProgramContextUpdate(BaseModel):
+    program_url: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=500)] = None
+    program_description: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=6_000)] = None
+
+    @field_validator("program_url", "program_description")
+    @classmethod
+    def optional_context_must_not_be_blank(cls, value: str | None) -> str | None:
+        return value or None
+
+
 class ApplicationSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -31,6 +43,8 @@ class ApplicationSummaryResponse(BaseModel):
     target_school: str
     target_program: str
     degree_type: str | None
+    program_url: str | None
+    program_description: str | None
     status: str
     created_at: datetime
     updated_at: datetime

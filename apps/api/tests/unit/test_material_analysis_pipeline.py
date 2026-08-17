@@ -10,6 +10,7 @@ from app.ai.fake_interview_map import FakeInterviewMapLLM
 from app.ai.deepseek_interview_map import (
     _build_evidence_catalog,
     _ground_evidence_to_source_pages,
+    _include_referenced_catalog_evidence,
     _normalise_model_payload,
     _parse_model_json,
     _replace_catalog_evidence,
@@ -218,6 +219,24 @@ def test_deepseek_catalog_selection_replaces_model_copied_evidence_fields() -> N
     resolved = _replace_catalog_evidence(payload, catalog)
 
     assert resolved == {"evidence": [selected]}
+
+
+def test_deepseek_catalog_restores_an_omitted_but_referenced_evidence_entry() -> None:
+    inputs, reader = analysis_inputs()
+    extraction_service = DocumentExtractionService()
+    catalog = _build_evidence_catalog(
+        [extraction_service.extract(item, reader) for item in inputs]
+    )
+    selected = catalog[0]
+    payload = {
+        "evidence": [],
+        "claims": [{"evidence_ids": [selected["evidence_id"]]}],
+        "risks": [],
+    }
+
+    resolved = _include_referenced_catalog_evidence(payload, catalog)
+
+    assert resolved == {"evidence": [selected], "claims": payload["claims"], "risks": []}
 
 
 def test_deepseek_json_parser_accepts_a_fenced_object() -> None:

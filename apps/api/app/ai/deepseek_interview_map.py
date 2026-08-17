@@ -10,7 +10,7 @@ from uuid import UUID
 import httpx
 from pydantic import ValidationError
 
-from app.schemas.interview_map import InterviewMap
+from app.schemas.interview_map import ApplicationContext, InterviewMap
 from app.services.document_extraction import ExtractedDocument
 
 
@@ -19,7 +19,12 @@ class DeepSeekInterviewMapLLM:
         self._api_key, self._model = api_key, model
         self._url = f"{base_url.rstrip('/')}/chat/completions"
 
-    def generate(self, documents: list[ExtractedDocument], analysis_run_id: UUID) -> InterviewMap:
+    def generate(
+        self,
+        documents: list[ExtractedDocument],
+        analysis_run_id: UUID,
+        application_context: ApplicationContext | None = None,
+    ) -> InterviewMap:
         evidence_catalog = _build_evidence_catalog(documents)
         prompt = {
             "task": "Return only one valid interview-map-v1 JSON object.",
@@ -32,6 +37,8 @@ class DeepSeekInterviewMapLLM:
                 "Return at most 3 evidence entries, 3 claims, and 2 high-value interview-verifiable risks.",
                 "Each risk has exactly one objective and at most 3 coverage conditions.",
                 "CandidateProfile has at most 2 research_interests and 2 missing_or_uncertain_information entries.",
+                "Program context is not candidate evidence and must not be described as an official requirement unless its provided description says so.",
+                "When program context is present, give each risk a concise relevance_to_target based only on that context.",
                 "For every evidence location, set start_offset and end_offset to null; never use 0.",
                 "Each original_text must be an exact quote from one page and no longer than 300 characters.",
                 "CoverageCondition.type must be one of the enum values in json_schema, never a question type.",
@@ -39,6 +46,9 @@ class DeepSeekInterviewMapLLM:
             "analysis_run_id": str(analysis_run_id),
             "json_schema": InterviewMap.model_json_schema(),
             "input_manifest": [item.manifest.model_dump(mode="json") for item in documents],
+            "program_context": (
+                application_context.model_dump(mode="json") if application_context else None
+            ),
             "evidence_catalog": evidence_catalog,
         }
         response = httpx.post(
@@ -65,6 +75,7 @@ class DeepSeekInterviewMapLLM:
             content = choice["message"]["content"]
             payload = _parse_model_json(content)
             payload = _replace_catalog_evidence(payload, evidence_catalog)
+            payload = _include_referenced_catalog_evidence(payload, evidence_catalog)
             payload = _ground_evidence_to_source_pages(payload, documents)
             payload = _normalise_model_payload(payload)
             return InterviewMap.model_validate(payload)
@@ -232,6 +243,37 @@ def _replace_catalog_evidence(payload: object, catalog: list[dict[str, object]])
         if selected is not None:
             evidence.clear()
             evidence.update(selected)
+    return payload
+
+
+def _include_referenced_catalog_evidence(
+    payload: object, catalog: list[dict[str, object]]
+) -> object:
+    """Restore catalogue citations the model referenced but omitted from evidence.
+
+    Catalogue IDs are generated from extracted PDF pages, so adding one preserves
+    the evidence-grounding contract rather than accepting a model invention.
+    """
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("evidence"), list):
+        return payload
+    catalog_by_id = {str(item["evidence_id"]): item for item in catalog}
+    referenced_ids: set[str] = set()
+    for claim in payload.get("claims", []):
+        if isinstance(claim, dict) and isinstance(claim.get("evidence_ids"), list):
+            referenced_ids.update(str(item) for item in claim["evidence_ids"])
+    for risk in payload.get("risks", []):
+        if isinstance(risk, dict) and isinstance(risk.get("evidence_ids"), list):
+            referenced_ids.update(str(item) for item in risk["evidence_ids"])
+    present_ids = {
+        str(evidence.get("evidence_id"))
+        for evidence in payload["evidence"]
+        if isinstance(evidence, dict)
+    }
+    for evidence_id in sorted(referenced_ids - present_ids):
+        selected = catalog_by_id.get(evidence_id)
+        if selected is not None:
+            payload["evidence"].append(dict(selected))
     return payload
 
 

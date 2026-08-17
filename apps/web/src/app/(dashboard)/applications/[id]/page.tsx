@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import DocumentUploadForm from "@/components/document-upload-form";
 import MaterialAnalysisPanel from "@/components/material-analysis-panel";
+import ProgramContextForm from "@/components/program-context-form";
 import { ApiClientError, apiFetch } from "@/lib/api/client";
 import type { ApplicationDetail, DocumentType } from "@/types/api";
 
@@ -123,6 +124,7 @@ export default function ApplicationDetailPage() {
           />
         ))}
       </div>
+      <ProgramContextForm application={application} onSaved={setApplication} />
       <MaterialAnalysisPanel
         applicationId={application.id}
         hasRequiredDocuments={hasRequiredDocuments}

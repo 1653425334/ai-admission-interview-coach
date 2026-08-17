@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=300)]
 MediumText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1_000)]
+LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=6_000)]
 Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
 Identifier = Annotated[str, StringConstraints(pattern=r"^[a-z][a-z0-9-]{0,63}$")]
 
@@ -163,6 +164,7 @@ class InterviewRisk(DomainModel):
     suggested_question_types: Annotated[list[SuggestedQuestionType], Field(min_length=1)]
     max_followups: Annotated[int, Field(ge=0, le=2)]
     verification_status: VerificationStatus = VerificationStatus.UNVERIFIED
+    relevance_to_target: MediumText | None = None
 
 
 class CandidateProfile(DomainModel):
@@ -186,10 +188,20 @@ class InputDocumentManifest(DomainModel):
     page_count: Annotated[int, Field(ge=1)]
 
 
+class ApplicationContext(DomainModel):
+    """User-provided target-program context; it is not candidate evidence."""
+
+    target_school: ShortText
+    target_program: ShortText
+    program_url: Annotated[str | None, StringConstraints(strip_whitespace=True, max_length=500)] = None
+    program_description: LongText | None = None
+
+
 class InterviewMap(DomainModel):
     schema_version: Literal["interview-map-v1"]
     analysis_run_id: UUID
     input_manifest: Annotated[list[InputDocumentManifest], Field(min_length=2, max_length=2)]
+    application_context: ApplicationContext | None = None
     candidate_profile: CandidateProfile
     evidence: list[Evidence] = Field(default_factory=list)
     claims: list[CandidateClaim] = Field(default_factory=list)

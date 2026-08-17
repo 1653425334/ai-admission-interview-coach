@@ -16,6 +16,8 @@ export interface ApplicationSummary {
   id: string;
   target_school: string;
   target_program: string;
+  program_url?: string | null;
+  program_description?: string | null;
   degree_type: string | null;
   status: string;
   created_at: string;
@@ -111,6 +113,7 @@ export interface InterviewRisk {
   suggested_question_types: SuggestedQuestionType[];
   max_followups: number;
   verification_status: VerificationStatus;
+  relevance_to_target?: string | null;
 }
 
 export interface CandidateProfile {
@@ -131,6 +134,12 @@ export interface InterviewMap {
   schema_version: "interview-map-v1";
   analysis_run_id: string;
   input_manifest: InputDocumentManifest[];
+  application_context?: {
+    target_school: string;
+    target_program: string;
+    program_url: string | null;
+    program_description: string | null;
+  } | null;
   candidate_profile: CandidateProfile;
   evidence: Evidence[];
   claims: CandidateClaim[];

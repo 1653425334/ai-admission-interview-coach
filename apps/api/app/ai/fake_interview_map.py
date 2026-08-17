@@ -8,6 +8,7 @@ from app.schemas.interview_map import (
     AssertionStrength,
     CandidateClaim,
     CandidateProfile,
+    ApplicationContext,
     ClaimCategory,
     CoverageCondition,
     CoverageConditionType,
@@ -39,7 +40,10 @@ class FakeInterviewMapLLM:
     """
 
     def generate(
-        self, documents: list[ExtractedDocument], analysis_run_id: UUID
+        self,
+        documents: list[ExtractedDocument],
+        analysis_run_id: UUID,
+        application_context: ApplicationContext | None = None,
     ) -> InterviewMap:
         documents_by_type = {document.manifest.document_type: document for document in documents}
         cv_document = documents_by_type[DocumentType.CV]

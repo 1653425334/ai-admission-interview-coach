@@ -14,8 +14,14 @@ from app.schemas.application import (
     ApplicationDetailResponse,
     ApplicationListResponse,
     ApplicationSummaryResponse,
+    ProgramContextUpdate,
 )
-from app.services.applications import create_application, get_owned_application, list_owned_applications
+from app.services.applications import (
+    create_application,
+    get_owned_application,
+    list_owned_applications,
+    update_program_context,
+)
 
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -48,4 +54,18 @@ def get_application(
 ) -> ApplicationDetailResponse:
     return ApplicationDetailResponse.model_validate(
         get_owned_application(db, application_id, principal.user_id)
+    )
+
+
+@router.patch("/{application_id}/program-context", response_model=ApplicationDetailResponse)
+def update_owned_program_context(
+    application_id: UUID,
+    payload: ProgramContextUpdate,
+    principal: AuthPrincipal = Depends(get_current_principal),
+    db: Session = Depends(get_db),
+) -> ApplicationDetailResponse:
+    return ApplicationDetailResponse.model_validate(
+        update_program_context(
+            db, application_id=application_id, user_id=principal.user_id, payload=payload
+        )
     )

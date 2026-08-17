@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.errors import ApiError
 from app.db.models.application import Application
 from app.db.models.profile import Profile
-from app.schemas.application import ApplicationCreate
+from app.schemas.application import ApplicationCreate, ProgramContextUpdate
 
 
 def get_owned_application(db: Session, application_id: UUID, user_id: UUID) -> Application:
@@ -43,9 +43,22 @@ def create_application(db: Session, user_id: UUID, payload: ApplicationCreate) -
         target_school=payload.target_school,
         target_program=payload.target_program,
         degree_type=payload.degree_type,
+        program_url=payload.program_url,
+        program_description=payload.program_description,
         status="ACTIVE",
     )
     db.add(application)
+    db.flush()
+    db.refresh(application)
+    return application
+
+
+def update_program_context(
+    db: Session, *, application_id: UUID, user_id: UUID, payload: ProgramContextUpdate
+) -> Application:
+    application = get_owned_application(db, application_id, user_id)
+    application.program_url = payload.program_url
+    application.program_description = payload.program_description
     db.flush()
     db.refresh(application)
     return application

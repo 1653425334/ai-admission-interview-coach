@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import UUID
 
-from app.schemas.interview_map import InterviewMap
+from app.schemas.interview_map import ApplicationContext, InterviewMap
 from app.services.document_extraction import (
     AnalysisDocumentInput,
     DocumentExtractionService,
@@ -18,7 +18,10 @@ from app.services.interview_map_validation import validate_interview_map
 
 class InterviewMapGenerator(Protocol):
     def generate(
-        self, documents: list[ExtractedDocument], analysis_run_id: UUID
+        self,
+        documents: list[ExtractedDocument],
+        analysis_run_id: UUID,
+        application_context: ApplicationContext | None = None,
     ) -> InterviewMap:
         """Generate a schema-shaped map from canonical extracted document text."""
 
@@ -47,9 +50,16 @@ class MaterialAnalysisPipeline:
         return [self._extraction_service.extract(document, reader) for document in inputs]
 
     def generate_validated_map(
-        self, documents: list[ExtractedDocument], analysis_run_id: UUID
+        self,
+        documents: list[ExtractedDocument],
+        analysis_run_id: UUID,
+        application_context: ApplicationContext | None = None,
     ) -> InterviewMap:
-        interview_map = self._llm.generate(documents, analysis_run_id)
+        interview_map = self._llm.generate(documents, analysis_run_id, application_context)
+        if application_context is not None:
+            interview_map = interview_map.model_copy(
+                update={"application_context": application_context}
+            )
         validate_interview_map(interview_map)
         validate_evidence_against_documents(interview_map, documents)
         return interview_map

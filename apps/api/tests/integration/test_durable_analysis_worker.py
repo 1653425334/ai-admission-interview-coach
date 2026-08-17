@@ -25,7 +25,7 @@ from app.db.models.job import Job
 from app.db.models.llm_run import LlmRun
 from app.db.models.profile import Profile
 from app.schemas.document import DocumentType
-from app.schemas.interview_map import InterviewMap
+from app.schemas.interview_map import ApplicationContext, InterviewMap
 from app.services.analysis_runs import create_or_reuse_analysis_run
 from app.services.document_extraction import DocumentExtractionService
 from app.services.documents import delete_owned_document
@@ -60,7 +60,12 @@ class TemporarilyUnavailableStorage(FakeStorage):
 
 
 class InvalidEvidenceGenerator:
-    def generate(self, documents: list[object], analysis_run_id: UUID) -> InterviewMap:
+    def generate(
+        self,
+        documents: list[object],
+        analysis_run_id: UUID,
+        application_context: ApplicationContext | None = None,
+    ) -> InterviewMap:
         interview_map = FakeInterviewMapLLM().generate(documents, analysis_run_id)  # type: ignore[arg-type]
         invalid_evidence = interview_map.evidence[0].model_copy(
             update={"original_text": "Evidence absent from the source PDF."}

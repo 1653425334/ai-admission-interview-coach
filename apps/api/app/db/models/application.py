@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, desc, func
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text, desc, func
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,8 @@ class Application(Base):
     )
     target_school: Mapped[str] = mapped_column(String, nullable=False)
     target_program: Mapped[str] = mapped_column(String, nullable=False)
+    program_url: Mapped[str | None] = mapped_column(String, nullable=True)
+    program_description: Mapped[str | None] = mapped_column(Text, nullable=True)
     degree_type: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="DRAFT")
     created_at: Mapped[datetime] = mapped_column(

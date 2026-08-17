@@ -78,6 +78,7 @@ const interviewMap: InterviewMap = {
     suggested_question_types: ["EVIDENCE_PROBE", "TECHNICAL_DEPTH_PROBE"],
     max_followups: 2,
     verification_status: "UNVERIFIED",
+    relevance_to_target: "This verifies a technical claim relevant to the target MSc AI application.",
   }],
   priority_risk_ids: ["risk-robustness-evidence"],
 };
@@ -157,6 +158,8 @@ describe("MaterialAnalysisPanel", () => {
     expect(screen.getByText("EVIDENCE_GAP")).toBeInTheDocument();
     expect(screen.getByText("Verification status: UNVERIFIED")).toBeInTheDocument();
     expect(screen.getByText("Names the robustness or perturbation test. (required)")).toBeInTheDocument();
+    expect(screen.getByText("Why this matters for this application")).toBeInTheDocument();
+    expect(screen.getByText("This verifies a technical claim relevant to the target MSc AI application.")).toBeInTheDocument();
   });
 
   it("shows a safe failure message and allows a retry", async () => {

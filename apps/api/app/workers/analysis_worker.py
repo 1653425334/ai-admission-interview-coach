@@ -18,7 +18,7 @@ from app.db.models.job import Job
 from app.db.models.llm_run import LlmRun
 from app.ai.deepseek_interview_map import DeepSeekInvalidResponseError
 from app.parsers.pdf_text import PdfTextExtractionError
-from app.schemas.interview_map import DocumentType, InterviewMap
+from app.schemas.interview_map import ApplicationContext, DocumentType, InterviewMap
 from app.services.analysis_runs import input_manifest_matches_current_documents
 from app.services.document_extraction import (
     AnalysisDocumentInput,
@@ -51,6 +51,7 @@ class PreparedWork:
     analysis_run_id: UUID
     inputs: list[AnalysisDocumentInput]
     storage_keys: dict[UUID, str]
+    application_context: ApplicationContext
 
 
 class StorageDocumentReader(DocumentReader):
@@ -99,7 +100,7 @@ class DurableAnalysisWorker:
             self._mark_building_map(claimed.analysis_run_id)
             started = perf_counter()
             interview_map = self._pipeline.generate_validated_map(
-                extracted_documents, claimed.analysis_run_id
+                extracted_documents, claimed.analysis_run_id, prepared.application_context
             )
             latency_ms = int((perf_counter() - started) * 1000)
             self._persist_success(claimed, extracted_documents, interview_map, latency_ms)
@@ -184,6 +185,9 @@ class DurableAnalysisWorker:
                     analysis_run_id=analysis_run.id,
                     inputs=inputs,
                     storage_keys={item.document_id: document_by_id[item.document_id].storage_key for item in inputs},
+                    application_context=ApplicationContext.model_validate(
+                        analysis_run.input_manifest_json["application_context"]
+                    ),
                 )
 
     def _mark_building_map(self, analysis_run_id: UUID) -> None:
