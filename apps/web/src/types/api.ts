@@ -159,3 +159,95 @@ export interface AnalysisRunResponse {
   completed_at: string | null;
   interview_map: InterviewMap | null;
 }
+
+export type InterviewSessionStatus = "PENDING" | "ACTIVE" | "COMPLETED" | "FAILED";
+export type InterviewTurnStatus = "ASKED" | "ANSWERED" | "EVALUATED";
+export type CoverageResult = "MET" | "NOT_MET" | "UNCLEAR";
+
+export interface ConditionEvaluation {
+  condition_id: string;
+  result: CoverageResult;
+  answer_excerpt: string | null;
+  reason: string;
+}
+
+export interface CommunicationFeedback {
+  grammar: string | null;
+  vocabulary: string | null;
+  clarity: string | null;
+  structure: string | null;
+  conciseness: string | null;
+}
+
+export interface AnswerEvaluation {
+  question_id: string;
+  risk_id: string;
+  objective_id: string;
+  condition_results: ConditionEvaluation[];
+  unmet_required_condition_ids: string[];
+  strengths: string[];
+  missing_points: string[];
+  unsupported_claims: string[];
+  communication_feedback: CommunicationFeedback | null;
+}
+
+export interface ConditionState {
+  condition_id: string;
+  latest_result: CoverageResult | null;
+  last_question_id: string | null;
+}
+
+export interface ObjectiveState {
+  objective_id: string;
+  condition_states: ConditionState[];
+  followups_used: number;
+  all_required_conditions_met: boolean;
+  unresolved_required_condition_ids: string[];
+}
+
+export interface RiskState {
+  risk_id: string;
+  verification_status: VerificationStatus;
+  objective_states: ObjectiveState[];
+}
+
+export interface FinalInterviewReport {
+  overall_summary: string;
+  strong_answers: string[];
+  unresolved_risks: string[];
+  preparation_recommendations: string[];
+  english_communication_feedback: CommunicationFeedback | null;
+}
+
+export interface InterviewTurnResponse {
+  id: string;
+  sequence_number: number;
+  risk_id: string;
+  objective_id: string;
+  question_type: SuggestedQuestionType;
+  target_condition_ids: string[];
+  question_text: string;
+  followup_index: number;
+  parent_turn_id: string | null;
+  answer_text: string | null;
+  status: InterviewTurnStatus;
+  evaluation: AnswerEvaluation | null;
+  asked_at: string;
+  answered_at: string | null;
+}
+
+export interface InterviewSessionResponse {
+  id: string;
+  application_id: string;
+  analysis_run_id: string;
+  status: InterviewSessionStatus;
+  question_budget: number;
+  questions_asked: number;
+  current_turn_id: string | null;
+  turns: InterviewTurnResponse[];
+  derived_state: { risk_states: RiskState[] };
+  final_report: FinalInterviewReport | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}

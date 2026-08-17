@@ -47,3 +47,6 @@ class Application(Base):
     analysis_runs: Mapped[list["AnalysisRun"]] = relationship(
         back_populates="application", cascade="all, delete-orphan"
     )
+    interview_sessions: Mapped[list["InterviewSession"]] = relationship(
+        back_populates="application", cascade="all, delete-orphan"
+    )

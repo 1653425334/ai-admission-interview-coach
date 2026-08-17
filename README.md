@@ -81,6 +81,10 @@ The following values are required. `.env.example` contains only placeholders and
 | `NEXT_PUBLIC_SUPABASE_URL` | Web | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Web | Browser publishable/anon key, never the service-role key |
 | `NEXT_PUBLIC_API_BASE_URL` | Web | FastAPI base URL, normally `http://localhost:8000` |
+| `LLM_MODE` | API/analysis worker | `fake` for tests and offline development; `deepseek` for real material analysis and adaptive interviews |
+| `DEEPSEEK_API_KEY` | API/analysis worker | Server-only DeepSeek key; required when `LLM_MODE=deepseek` |
+| `DEEPSEEK_MODEL` | API/analysis worker | DeepSeek model name used for structured generation |
+| `DEEPSEEK_BASE_URL` | API/analysis worker | Normally `https://api.deepseek.com` |
 
 Next.js reads its local environment file from its application directory. Create `apps/web/.env.local` with only the three `NEXT_PUBLIC_*` entries above (the same public values from root `.env`); do not copy the server secret into that file.
 
@@ -121,11 +125,16 @@ Pop-Location
 ```
 
 The worker uses the same root `.env` as FastAPI, so it requires a migrated
-`DATABASE_URL` and valid private Supabase Storage settings. It intentionally
-uses the offline Fake LLM in M2, so this local workflow does not make a model
-or network call beyond reading the already-private uploaded PDFs from Storage.
+`DATABASE_URL` and valid private Supabase Storage settings. With `LLM_MODE=fake`
+it uses the deterministic offline provider; with `LLM_MODE=deepseek` it uses the
+configured DeepSeek model for structured InterviewMap generation.
 Keep this process running while testing the analysis UI. For a one-job smoke
 test, use `uv run python -m app.workers.run_analysis_worker --once`.
+
+M3 text interviews run synchronously through FastAPI and do not require a
+separate interview worker. In `deepseek` mode, DeepSeek writes only the next
+question and condition-level answer evaluation; deterministic application code
+retains control of verification status, follow-up limits, and next-action flow.
 
 Run the web app in another terminal:
 

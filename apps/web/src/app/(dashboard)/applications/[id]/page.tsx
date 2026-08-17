@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import DocumentUploadForm from "@/components/document-upload-form";
 import MaterialAnalysisPanel from "@/components/material-analysis-panel";
+import MockInterviewPanel from "@/components/mock-interview-panel";
 import ProgramContextForm from "@/components/program-context-form";
 import { ApiClientError, apiFetch } from "@/lib/api/client";
 import type { ApplicationDetail, DocumentType } from "@/types/api";
@@ -129,6 +130,7 @@ export default function ApplicationDetailPage() {
         applicationId={application.id}
         hasRequiredDocuments={hasRequiredDocuments}
       />
+      <MockInterviewPanel applicationId={application.id} />
     </main>
   );
 }
