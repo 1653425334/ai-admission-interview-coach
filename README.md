@@ -4,6 +4,34 @@
 
 > 当前状态：M1–M3 核心闭环已完成。支持 Supabase Auth、私有材料上传、DeepSeek / Fake 双模式材料分析、自适应模拟面试、持久化会话和最终报告。
 
+## 产品界面
+
+从申请工作区到面试复盘，系统围绕同一份申请材料完成完整的准备闭环。以下截图使用虚构并脱敏的演示数据。
+
+### 申请工作区
+
+为每个目标学校和项目建立独立工作区，集中管理材料、分析和模拟面试进度。
+
+![申请工作区](docs/screenshots/application-workspace.png)
+
+### 证据驱动的准备地图
+
+系统从 CV 和 Personal Statement 中定位原文证据，识别值得重点验证的陈述与风险，并给出回答应覆盖的具体信息。
+
+![证据驱动的面试准备地图](docs/screenshots/interview-preparation-map.png)
+
+### 自适应模拟面试
+
+每道问题都对应准备地图中的风险与覆盖条件，系统会根据回答质量继续追问或切换目标。
+
+![自适应模拟面试](docs/screenshots/adaptive-mock-interview.png)
+
+### 面试复盘
+
+面试结束后汇总已验证的能力、仍需加强的部分和本次练习完成情况。
+
+![模拟面试复盘](docs/screenshots/interview-review.png)
+
 ## 为什么做这个项目
 
 普通 LLM 很容易总结申请材料或生成“常见面试题”，但这类输出通常缺少三个关键能力：
@@ -195,6 +223,32 @@ Pop-Location
 
 ### 启动服务
 
+#### 一键验收（推荐）
+
+在仓库根目录运行以下命令，会在后台启动 FastAPI、Material Analysis Worker 和 Next.js，检查 API/Web 是否就绪，并自动打开浏览器：
+
+```powershell
+.\acceptance.ps1
+```
+
+脚本直接使用项目内已安装的 Python/Node 依赖，因此不要求全局 `pnpm` 命令可用。日志统一写入 `.run/acceptance`。常用选项：
+
+```powershell
+# 使用 DeepSeek 验收项目个性化（需要 .env 中已配置 DEEPSEEK_API_KEY）
+.\acceptance.ps1 -Mode deepseek
+
+# 先跑 API/Web tests、lint 和 production build，再启动验收环境
+.\acceptance.ps1 -RunTests
+
+# 查看状态或停止脚本启动的三个服务
+.\acceptance.ps1 -Action status
+.\acceptance.ps1 -Action stop
+```
+
+不传 `-Mode` 时读取根目录 `.env` 中的 `LLM_MODE`；Fake 模式适合稳定流程验收，学校/项目个性化应使用 DeepSeek 模式。
+
+#### 分别启动
+
 FastAPI：
 
 ```powershell
@@ -245,8 +299,8 @@ pnpm --filter web dev
 
 当前本地测试基线：
 
-- API：`185 passed`；
-- Web：`62 passed`；
+- API：`186 passed`；
+- Web：`64 passed`；
 - ESLint：通过；
 - TypeScript：通过。
 
